@@ -23,6 +23,21 @@ test('diff handles Korean and identical input', () => {
   assert.deepEqual(D.diffWords(a, a), [{ op: 'eq', text: a }]);
 });
 
+test('hunks can be accepted or rejected individually', () => {
+  const a = 'We propose an method that are fast.';
+  const b = 'We propose a method that is fast.';
+  const hunks = D.toHunks(D.diffWords(a, b));
+  const changes = hunks.filter((h) => h.type === 'chg');
+  assert.equal(changes.length, 2);
+  assert.equal(D.composeHunks(hunks), b);
+  changes[1].accepted = false;
+  assert.equal(D.composeHunks(hunks), 'We propose a method that are fast.');
+  for (const h of changes) h.accepted = false;
+  assert.equal(D.composeHunks(hunks), a);
+  const html = D.renderHunksHtml(hunks);
+  assert.match(html, /class="chg off" data-i="\d+"/);
+});
+
 test('renderDiffHtml escapes markup', () => {
   const html = D.renderDiffHtml(D.diffWords('a <b> & x', 'a <i> & y'));
   const withoutDiffTags = html.replace(/<\/?(del|ins)>/g, '');

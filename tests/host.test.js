@@ -102,6 +102,26 @@ test('claude run streams deltas and returns final text', async () => {
   assert.equal(args.at(-1), '--foo');
 });
 
+test('web flag enables exactly WebSearch/WebFetch for claude, ignored for codex', async () => {
+  const { args } = await talk({ type: 'run', backend: 'claude', system: 'S', prompt: 'p', web: true, effort: 'high' });
+  const i = args.indexOf('--tools');
+  assert.deepEqual(args.slice(i, i + 4), ['--tools', 'WebSearch,WebFetch', '--allowedTools', 'WebSearch,WebFetch']);
+  const plain = await talk({ type: 'run', backend: 'claude', system: 'S', prompt: 'p' });
+  assert.equal(plain.args[plain.args.indexOf('--tools') + 1], '');
+  assert.ok(!plain.args.includes('--allowedTools'));
+  const codex = await talk({ type: 'run', backend: 'codex', system: 'S', prompt: '<task>p</task>', web: true, effort: 'none' });
+  assert.ok(!codex.args.some((a) => /WebSearch/.test(a)));
+  assert.equal(codex.args[codex.args.indexOf('-c') + 1], 'model_reasoning_effort="none"');
+});
+
+test('ping includes CLI default settings objects', async () => {
+  const { msgs } = await talk({ type: 'ping' });
+  const pong = msgs.find((m) => m.type === 'pong');
+  assert.equal(typeof pong.claude.defaults, 'object');
+  assert.equal(typeof pong.codex.defaults, 'object');
+  assert.equal(pong.hostVersion, '0.2.0');
+});
+
 test('claude CLI error is surfaced', async () => {
   const { msgs } = await talk({ type: 'run', backend: 'claude', system: '', prompt: 'hi' }, { FAKE_MODE: 'error' });
   const err = msgs.at(-1);
