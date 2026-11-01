@@ -188,6 +188,37 @@
   }
   $('test').addEventListener('click', testConnection);
 
+  // Usage: per-day counters written by the panel (olai-usage:YYYY-MM-DD).
+  chrome.storage.local.get(null).then((all) => {
+    const days = Object.keys(all).filter((k) => k.startsWith('olai-usage:')).sort();
+    const cutoff = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+    const old = days.filter((k) => k.slice(11) < cutoff);
+    if (old.length) chrome.storage.local.remove(old).catch(() => {});
+    const recent = days.filter((k) => k.slice(11) >= cutoff).slice(-7).reverse();
+    const box = $('usage');
+    if (!recent.length) { box.textContent = '아직 기록이 없습니다.'; return; }
+    const tbl = document.createElement('table');
+    tbl.className = 'usage';
+    let runs = 0;
+    let cost = 0;
+    for (const k of recent) {
+      const u = all[k] || {};
+      runs += u.runs || 0;
+      cost += u.cost || 0;
+      const tr = tbl.insertRow();
+      tr.insertCell().textContent = k.slice(11);
+      tr.insertCell().textContent = `${u.runs || 0}회`;
+      tr.insertCell().textContent = u.cost ? `~$${u.cost.toFixed(2)}` : '–';
+    }
+    const tr = tbl.insertRow();
+    tr.className = 'sum';
+    tr.insertCell().textContent = '합계';
+    tr.insertCell().textContent = `${runs}회`;
+    tr.insertCell().textContent = cost ? `~$${cost.toFixed(2)}` : '–';
+    box.textContent = '';
+    box.append(tbl);
+  }).catch(() => { $('usage').textContent = '불러오지 못했습니다.'; });
+
   Promise.all([chrome.storage.sync.get(null), chrome.storage.local.get(LOCAL_KEYS)]).then(([syncAll, loc]) => {
     const fromSync = Object.fromEntries(Object.entries(syncAll).filter(([k]) => k in P.DEFAULT_SETTINGS && !LOCAL_KEYS.includes(k)));
     const legacy = Object.fromEntries(LOCAL_KEYS.filter((k) => syncAll[k] !== undefined && loc[k] === undefined).map((k) => [k, syncAll[k]]));

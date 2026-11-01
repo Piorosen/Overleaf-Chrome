@@ -77,6 +77,24 @@ Transformers \cite{vaswani2017attention} and BERT \citep{devlin2018bert} build o
 `;
 const BIB_HTML = fakePage(BIB_DOC, 'refs.bib', [{ id: 'mainid', name: 'main.tex' }]);
 
+const AGENT_TEX = String.raw`\documentclass{article}
+\author{Jane Kim}
+\begin{document}
+\begin{abstract}
+We study sparse attention for long documents.
+\end{abstract}
+\section{Introduction}
+We train the the model on long documents and evaluate it on three benchmarks.
+\input{related}
+\section{Method}
+Our method uses a sparse attention layer. Code: https://github.com/janekim/sparse.
+\end{document}
+`;
+const RELATED_TEX = String.raw`\section{Related Work}
+Efficient transformers reduce the quadratic cost of attention with sparsity, low-rank projections, or kernels.
+`;
+const AGENT_HTML = fakePage(AGENT_TEX, 'main.tex', [{ id: 'relid', name: 'related.tex' }]);
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log('•', ...a);
 
@@ -106,7 +124,9 @@ async function main() {
     await page.setRequestInterception(true);
     page.on('request', (req) => {
       const u = req.url();
-      if (u.startsWith('https://www.overleaf.com/Project/e2ebib/doc/mainid/download')) req.respond({ status: 200, contentType: 'text/plain', body: MAIN_TEX });
+      if (u.startsWith('https://www.overleaf.com/Project/e2eagent/doc/relid/download')) req.respond({ status: 200, contentType: 'text/plain', body: RELATED_TEX });
+      else if (u.startsWith('https://www.overleaf.com/project/e2eagent')) req.respond({ status: 200, contentType: 'text/html', body: AGENT_HTML });
+      else if (u.startsWith('https://www.overleaf.com/Project/e2ebib/doc/mainid/download')) req.respond({ status: 200, contentType: 'text/plain', body: MAIN_TEX });
       else if (u.startsWith('https://www.overleaf.com/project/e2ebib')) req.respond({ status: 200, contentType: 'text/html', body: BIB_HTML });
       else if (u.startsWith('https://www.overleaf.com/project/')) req.respond({ status: 200, contentType: 'text/html', body: HTML });
       else req.continue();
@@ -190,7 +210,8 @@ async function main() {
     await page.screenshot({ path: path.join(OUT, '1-panel.png') });
 
     const ONLY_BIB = process.env.E2E_ONLY_BIB === '1';
-    if (!ONLY_BIB) {
+    const ONLY_AGENT = process.env.E2E_ONLY_AGENT === '1';
+    if (!ONLY_BIB && !ONLY_AGENT) {
     // ---- 1) 문법 교정 on a selection; toggle one change off; apply
     await selectText('we propose');
     await sleep(400);
@@ -383,6 +404,7 @@ async function main() {
 
     } // end of !ONLY_BIB
 
+    if (!ONLY_AGENT) {
     // ---- 12) BibTeX: arXiv → published, missing citations, add by DOI, audit (real metadata APIs, no AI)
     await page.goto('https://www.overleaf.com/project/e2ebib', { waitUntil: 'networkidle0' });
     await page.waitForSelector('.cm-editor');
@@ -442,6 +464,75 @@ async function main() {
     log('audit:', auditText.slice(0, 260));
     assert.match(auditText, /unusedthing2020/);
     await page.screenshot({ path: path.join(OUT, '12-bib-audit.png') });
+    } // end of !ONLY_AGENT
+
+    // ---- 14) agent project: stats/anonymity, follow-up refine, agent harness, right-click menu path
+    await page.goto('https://www.overleaf.com/project/e2eagent', { waitUntil: 'networkidle0' });
+    await page.waitForSelector('.cm-editor');
+    await page.waitForFunction(() => document.getElementById('overleaf-ai-extension-root'), { timeout: 10000 });
+    await sleep(1200);
+    if (!(await evalOn(await one('launcher'), function () { return !this.parentElement.querySelector('.panel').hidden; }))) await click(await one('launcher'));
+    await sleep(500);
+    await clickText('cat', '점검');
+    await clickText('chip', '분량·익명화');
+    for (let i = 0; i < 20 && !/본문 \d/.test(await text('lint-view')); i++) await sleep(300);
+    const statsText = (await text('lint-view')).replace(/\s+/g, ' ');
+    log('stats:', statsText.slice(0, 220));
+    assert.match(statsText, /초록 7단어/);
+    assert.match(statsText, /github/i);
+    assert.match(statsText, /Jane Kim|저자/);
+    await click(await one('stats-project'));
+    for (let i = 0; i < 30 && !/프로젝트 \.tex 2개/.test(await text('lint-view')); i++) await sleep(300);
+    const projText = (await text('lint-view')).replace(/\s+/g, ' ');
+    assert.match(projText, /프로젝트 \.tex 2개/);
+    assert.match(projText, /Related Work/);
+    log('project stats:', projText.slice(0, 160));
+    await page.screenshot({ path: path.join(OUT, '13-stats.png') });
+
+    // follow-up refine on a result
+    await selectText('We train the the model');
+    await sleep(300);
+    await clickText('cat', '교정');
+    await clickText('chip', '문법 교정');
+    log('grammar (agent page):', await waitStatus(/^(완료|변경할).*\[문법 교정\]/));
+    assert.ok(await visible('followup'), 'follow-up box visible');
+    await evalOn(await one('fu-text'), function () { this.focus(); });
+    await page.keyboard.type('Make it shorter: at most 10 words.');
+    await click(await one('fu-go'));
+    log('follow-up:', await waitStatus(/^(완료|변경할).*다듬기/));
+    const fuOut = await evalOn(await one('out'), function () { return this.value; });
+    log('follow-up output:', fuOut);
+    assert.ok(fuOut.split(/\s+/).length <= 14, 'follow-up made it shorter');
+    assert.ok(/오늘 \d+회/.test(await text('usage')), 'usage counter shown');
+    log('usage:', await text('usage'));
+
+    // agent: open via the right-click menu path (service worker → tab message), then run a task
+    const tabId = await worker.evaluate(async () => (await chrome.tabs.query({ url: 'https://www.overleaf.com/project/e2eagent*' }))[0]?.id);
+    await selectText('sparse attention layer', false);
+    await worker.evaluate((id) => chrome.tabs.sendMessage(id, { type: 'command', command: 'action', actionId: 'agent' }), tabId);
+    await sleep(800);
+    assert.ok(await visible('agent-view'), 'agent tab opened from menu message');
+    await evalOn(await one('agent-text'), function () { this.value = ''; this.focus(); });
+    await page.keyboard.type('Fix the duplicated word typo in main.tex using propose_edit (one proposal). Then tell me in one sentence what related.tex is about.');
+    await click(await one('agent-send'));
+    const t2 = Date.now();
+    for (let i = 0; i < 300; i++) {
+      await sleep(500);
+      if (!(await visible('agent-stop')) && (await findAll('msg')).length >= 2) break;
+    }
+    const logText = (await text('agent-log')).replace(/\s+/g, ' ');
+    log(`agent (${((Date.now() - t2) / 1000).toFixed(1)}s):`, logText.slice(0, 500));
+    await page.screenshot({ path: path.join(OUT, '14-agent.png') });
+    assert.match(logText, /related\.tex|읽기|read/i);
+    assert.match(logText, /efficient|attention|transformer|related work/i);
+    const props = await findAll('ag-apply');
+    assert.ok(props.length >= 1, 'agent proposed an edit');
+    await click(props[0]);
+    for (let i = 0; i < 20 && /the the/.test(await docText()); i++) await sleep(300);
+    assert.doesNotMatch(await docText(), /the the/);
+    assert.match(await text('agent-props'), /적용됨/);
+    log('agent proposal applied ✓ — doc line:', (await docText()).split('\n').find((l) => /We train/.test(l)));
+    await page.screenshot({ path: path.join(OUT, '15-agent-applied.png') });
 
     await page.goto('https://www.overleaf.com/project/e2e', { waitUntil: 'networkidle0' });
     await page.waitForSelector('.cm-editor');

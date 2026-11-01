@@ -120,3 +120,25 @@ test('sub-figures, acronym definitions, umlauts and textual citations', () => {
   assert.ok(has(BASE('그림 1 에서 보듯이 성능이 좋다.'), 'hardcoded-ref'));
   assert.ok(!has(BASE('He did not resign. We re-sign it.'), 'hyphen-variant'));
 });
+
+test('documentStats counts prose words per section, abstract, floats and citations', () => {
+  const d = '\\documentclass{article}\n\\begin{document}\n\\begin{abstract}We propose a method. It works.\\end{abstract}\n\\section{Method} Short text here.\n\\begin{figure}\\caption{c}\\end{figure}\n\\section*{Acknowledgments} Thanks to the NSF \\cite{a,b}.\n\\end{document}';
+  const st = L.documentStats(d);
+  assert.equal(st.abstract, 6);
+  // headings are not part of the section's text; a caption word counts
+  assert.deepEqual(st.sections.map((x) => [x.title, x.words]), [['Method', 4], ['Acknowledgments', 4]]);
+  assert.equal(L.documentStats('\\begin{document}\nCode: https://github.com/a/b-c.d here.\n\\end{document}').total, 3);
+  assert.equal(st.figures, 1);
+  assert.equal(st.citations, 2);
+});
+
+test('anonymityIssues finds author names, self-citation, identifying links and acknowledgments', () => {
+  const d = '\\author{Jane Doe \\thanks{Univ}}\n\\begin{document}\nIn our previous work we showed it. https://github.com/jane/x\n\\section*{Acknowledgments} NSF.\n\\end{document}';
+  const msgs = L.anonymityIssues(d).map((i) => i.message).join(' | ');
+  assert.match(msgs, /저자 이름/);
+  assert.match(msgs, /thanks/);
+  assert.match(msgs, /자기 인용/);
+  assert.match(msgs, /github\.com/);
+  assert.match(msgs, /감사의 글/);
+  assert.equal(L.anonymityIssues('\\author{Anonymous Authors}\n\\begin{document}\nFine.\n\\end{document}').length, 0);
+});

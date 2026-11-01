@@ -67,7 +67,7 @@ if [[ -z "$CLAUDE_BIN" && -z "$CODEX_BIN" ]]; then
 fi
 
 mkdir -p "$INSTALL_DIR"
-cp "$REPO_DIR/host/host.js" "$INSTALL_DIR/host.js"
+cp "$REPO_DIR/host/host.js" "$REPO_DIR/host/mcp-server.js" "$REPO_DIR/host/agent-tools.js" "$INSTALL_DIR/"
 
 # config.json (JSON-encoded by node so odd characters in paths are safe). Keys the user added by hand
 # (claudeExtraArgs, codexExtraArgs, s2ApiKey, webDomains, keepApiKeyEnv) are preserved.

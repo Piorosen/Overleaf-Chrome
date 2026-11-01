@@ -14,6 +14,11 @@
  *   { type: "run", backend: "claude"|"codex", system, prompt, model?, effort?, timeoutSec?, web? }
  *       web: Claude only — enables WebSearch plus WebFetch restricted to scholarly domains.
  *   { type: "bib", op: "arxiv"|"arxiv-search"|"s2"|"openalex-work"|"openalex-search"|"doi-bib"|"crossref-search", ... }
+ *   { type: "agent", projectKey, sessionId?, newSession?, system, prompt, model?, effort?, web?, timeoutSec?, maxToolCalls? }
+ *       Agent mode (Claude only): Claude Code runs a multi-step loop whose ONLY tools are the Overleaf
+ *       tools served by mcp-server.js (+ optional web search). Each tool call is relayed to the
+ *       extension as { type: "tool-call", callId, name, args } and answered with
+ *       { type: "tool-result", callId, ok, result|error }. Conversations resume per project.
  *
  * Messages to the extension:
  *   { type: "pong", hostVersion, caps, ... }   reply to ping
@@ -23,6 +28,9 @@
  *   { type: "final-chunk", text }              authoritative final text, chunked
  *   { type: "done", durationMs, costUsd? }     run finished successfully
  *   { type: "bib-result", ok, data?, error? }  reply to a bib request
+ *   { type: "session", sessionId }             agent conversation id (to resume next turn)
+ *   { type: "activity", name, input }          agent tool use (for the activity log)
+ *   { type: "tool-call", callId, name, args }  agent tool request to be executed by the extension
  *   { type: "error", error, detail? }          failure
  *
  * Hardening:
@@ -37,12 +45,17 @@
 'use strict';
 
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 
-const HOST_VERSION = '0.4.0';
-const CAPS = ['web', 'web-allowlist', 'bib', 'pgkill', 'sysprompt-file', 'reset'];
+const HOST_VERSION = '0.5.0';
+const CAPS = ['web', 'web-allowlist', 'bib', 'pgkill', 'sysprompt-file', 'reset', 'agent'];
+let AGENT_TOOLS = [];
+try { AGENT_TOOLS = require('./agent-tools.js').TOOLS.map((t) => t.name); } catch { /* agent mode unavailable */ }
+const IS_WIN = process.platform === 'win32';
 const MAX_OUT_MSG = 256 * 1024; // keep every message far below Chrome's 1 MB host->extension cap
 const KILL_GRACE_MS = 700;      // Chrome SIGKILLs the host ~2 s after disconnect; finish before that
 
@@ -70,12 +83,14 @@ function privateBaseDir() {
   const base = process.env.OLAI_WORKDIR
     || (process.platform === 'darwin'
       ? path.join(os.homedir(), 'Library', 'Caches', 'overleaf-ai-host')
-      : path.join(process.env.XDG_RUNTIME_DIR || process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'overleaf-ai-host'));
+      : IS_WIN
+        ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'overleaf-ai-host', 'work')
+        : path.join(process.env.XDG_RUNTIME_DIR || process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'overleaf-ai-host'));
   fs.mkdirSync(base, { recursive: true, mode: 0o700 });
   const st = fs.lstatSync(base);
   if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`work dir is not a directory: ${base}`);
   if (typeof process.getuid === 'function' && st.uid !== process.getuid()) throw new Error(`work dir not owned by current user: ${base}`);
-  if ((st.mode & 0o077) !== 0) fs.chmodSync(base, 0o700);
+  if (!IS_WIN && (st.mode & 0o077) !== 0) fs.chmodSync(base, 0o700);
   return base;
 }
 
@@ -113,7 +128,27 @@ let stdinEnded = false;
 function killTree(signal) {
   const c = child;
   if (!c || c.exitCode !== null || c.signalCode !== null) return;
+  if (IS_WIN) {
+    try { spawn('taskkill', ['/pid', String(c.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { try { c.kill(); } catch { /* gone */ } }
+    return;
+  }
   try { process.kill(-c.pid, signal); } catch { try { c.kill(signal); } catch { /* gone */ } }
+}
+
+// Windows: Node refuses to spawn .cmd/.bat without a shell (CVE-2024-27980), and a shell would re-parse
+// our arguments. npm installs CLIs as .cmd shims around a JS entry point, so run that entry with node
+// directly. Native .exe installs (e.g. %USERPROFILE%\.local\bin\claude.exe) are spawned as-is.
+function spawnable(bin, args) {
+  if (!IS_WIN || !/\.(cmd|bat)$/i.test(bin)) return { bin, args };
+  try {
+    const shim = fs.readFileSync(bin, 'utf8');
+    const m = shim.match(/"%(?:~)?dp0%?\\?([^"]+?\.(?:c?js|mjs))"/i);
+    if (m) {
+      const script = path.join(path.dirname(bin), m[1].replace(/^\\/, ''));
+      if (fs.existsSync(script)) return { bin: process.execPath, args: [script, ...args] };
+    }
+  } catch { /* fall through */ }
+  throw new Error(`${bin}: .cmd 실행 파일은 직접 실행할 수 없습니다. config.json 의 claudePath/codexPath 를 .exe 또는 .js 진입점으로 지정하세요.`);
 }
 
 function shutdownSoon() {
@@ -173,6 +208,12 @@ async function handle(msg) {
     return undefined;
   }
   if (msg.type === 'run') return run(msg);
+  if (msg.type === 'agent') return agentRun(msg);
+  if (msg.type === 'tool-result') {
+    const w = toolWaiters.get(msg.callId);
+    if (w) { toolWaiters.delete(msg.callId); w({ ok: !!msg.ok, result: msg.result, error: msg.error }); }
+    return undefined;
+  }
   send({ type: 'error', error: 'UNKNOWN_TYPE', detail: String(msg.type) });
   return undefined;
 }
@@ -189,7 +230,8 @@ function versionOf(name) {
     let out = '';
     let p;
     try {
-      p = spawn(bin, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const sp = spawnable(bin, ['--version']);
+      p = spawn(sp.bin, sp.args, { stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e) {
       return resolve({ ok: false, path: bin, error: String(e.message || e) });
     }
@@ -240,8 +282,8 @@ function configArgs(name) {
   return Array.isArray(list) ? list.filter((a) => typeof a === 'string' && a.length < 500) : [];
 }
 
-function run(req) {
-  if (child) return send({ type: 'error', error: 'BUSY' });
+function run(req, agent = null) {
+  if (child) { if (agent) agent.cleanup(); return send({ type: 'error', error: 'BUSY' }); }
   const backend = req.backend;
   if (backend !== 'claude' && backend !== 'codex') return send({ type: 'error', error: 'BAD_BACKEND' });
   if (typeof req.prompt !== 'string' || !req.prompt.trim()) return send({ type: 'error', error: 'EMPTY_PROMPT' });
@@ -252,27 +294,31 @@ function run(req) {
   const timeoutSec = Math.min(Math.max(Number(req.timeoutSec) || 180, 10), 1800);
 
   let runDir;
-  try { runDir = makeRunDir(); } catch (e) { return send({ type: 'error', error: 'WORKDIR_FAILED', detail: String(e.message || e) }); }
+  try { runDir = makeRunDir(); } catch (e) { if (agent) agent.cleanup(); return send({ type: 'error', error: 'WORKDIR_FAILED', detail: String(e.message || e) }); }
 
   const started = Date.now();
   let spec;
   try {
     spec = backend === 'claude'
-      ? claudeSpec({ system, model, effort, web, runDir })
+      ? claudeSpec({ system, model, effort, web, runDir, agent })
       : codexSpec({ model, effort, runDir });
   } catch (e) {
     removeDir(runDir);
+    if (agent) agent.cleanup();
     return send({ type: 'error', error: 'SPAWN_FAILED', detail: String(e.message || e) });
   }
   const stdinText = backend === 'claude' ? req.prompt : `${system}\n\n${req.prompt}`;
 
-  send({ type: 'status', text: backend === 'claude' ? 'Claude 실행 중…' : 'Codex 실행 중…' });
+  send({ type: 'status', text: agent ? '에이전트 실행 중…' : backend === 'claude' ? 'Claude 실행 중…' : 'Codex 실행 중…' });
+  if (agent) send({ type: 'session', sessionId: agent.sessionId });
 
   let proc;
   try {
-    proc = spawn(spec.bin, spec.args, { cwd: runDir, stdio: ['pipe', 'pipe', 'pipe'], env: childEnv(spec.env), detached: true });
+    const sp = spawnable(spec.bin, spec.args);
+    proc = spawn(sp.bin, sp.args, { cwd: agent ? agent.dir : runDir, stdio: ['pipe', 'pipe', 'pipe'], env: childEnv(spec.env), detached: !IS_WIN });
   } catch (e) {
     removeDir(runDir);
+    if (agent) agent.cleanup();
     return send({ type: 'error', error: 'SPAWN_FAILED', detail: `${spec.bin}: ${e.message}` });
   }
   child = proc;
@@ -304,6 +350,7 @@ function run(req) {
     delta: (text) => { if (!finished && text) send({ type: 'delta', text }); },
     reset: () => { if (!finished) send({ type: 'reset' }); },
     status: (text) => { if (!finished) send({ type: 'status', text }); },
+    activity: (name, input) => { if (!finished) send({ type: 'activity', name, input }); },
   });
 
   proc.on('close', (code, signal) => {
@@ -312,13 +359,83 @@ function run(req) {
     try { outcome = spec.result(code, signal, stderrTail); } catch (e) { outcome = { error: 'HOST_EXCEPTION', detail: String(e && e.stack || e) }; }
     if (child === proc) child = null;
     removeDir(runDir);
+    if (agent) agent.cleanup();
     if (outcome.error) {
       finish({ type: 'error', error: outcome.error, detail: outcome.detail });
     } else {
       if (!finished) sendChunked('final-chunk', outcome.text);
-      finish({ type: 'done', durationMs: Date.now() - started, costUsd: outcome.costUsd });
+      finish({ type: 'done', durationMs: Date.now() - started, costUsd: outcome.costUsd, sessionId: agent ? agent.sessionId : undefined, toolCalls: agent ? agent.toolCalls() : undefined });
     }
     maybeExit();
+  });
+  return undefined;
+}
+
+// ------------------------------------------------------------ agent mode ---
+
+const toolWaiters = new Map();
+let toolSeq = 0;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function agentRun(req) {
+  if (child) return send({ type: 'error', error: 'BUSY' });
+  if (!AGENT_TOOLS.length) return send({ type: 'error', error: 'AGENT_UNAVAILABLE', detail: 'agent-tools.js 가 없습니다. install-host.sh 를 다시 실행하세요.' });
+  if (!/^[a-zA-Z0-9]{8,64}$/.test(String(req.projectKey || ''))) return send({ type: 'error', error: 'BAD_REQUEST', detail: 'projectKey' });
+  const resume = UUID_RE.test(String(req.sessionId || '')) && !req.newSession;
+  const sessionId = resume ? req.sessionId : crypto.randomUUID();
+  const maxToolCalls = Math.min(Math.max(Number(req.maxToolCalls) || 40, 1), 200);
+  let base;
+  let dir;
+  try {
+    base = privateBaseDir();
+    dir = path.join(base, `agent-${req.projectKey}`); // stable per project: Claude Code keeps the session here
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  } catch (e) { return send({ type: 'error', error: 'WORKDIR_FAILED', detail: String(e.message || e) }); }
+
+  const sockPath = IS_WIN ? `\\\\.\\pipe\\olai-${crypto.randomBytes(8).toString('hex')}` : path.join(base, `s-${crypto.randomBytes(5).toString('hex')}.sock`);
+  let calls = 0;
+  const server = net.createServer((conn) => {
+    conn.setEncoding('utf8');
+    let buf = '';
+    conn.on('data', (d) => {
+      buf += d;
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        let m;
+        try { m = JSON.parse(line); } catch { continue; }
+        const reply = (r) => { try { conn.write(`${JSON.stringify({ id: m.id, ...r })}\n`); } catch { /* closed */ } };
+        if (!AGENT_TOOLS.includes(m.name)) { reply({ ok: false, error: 'unknown tool' }); continue; }
+        calls += 1;
+        if (calls > maxToolCalls) { reply({ ok: false, error: `tool budget of ${maxToolCalls} calls exhausted — stop calling tools and give your final answer now` }); continue; }
+        const callId = ++toolSeq;
+        const timer = setTimeout(() => { if (toolWaiters.delete(callId)) reply({ ok: false, error: 'the editor did not answer in time' }); }, 90000);
+        toolWaiters.set(callId, (r) => { clearTimeout(timer); reply(r); });
+        send({ type: 'tool-call', callId, name: m.name, args: m.args || {} });
+      }
+    });
+    conn.on('error', () => {});
+  });
+  server.on('error', (e) => send({ type: 'error', error: 'AGENT_SOCKET_FAILED', detail: String(e.message || e) }));
+  server.listen(sockPath, () => {
+    if (!IS_WIN) { try { fs.chmodSync(sockPath, 0o600); } catch { /* ignore */ } }
+    const mcpConfig = path.join(dir, `mcp-${crypto.randomBytes(4).toString('hex')}.json`);
+    fs.writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { overleaf: { command: process.execPath, args: [path.join(__dirname, 'mcp-server.js')], env: { OLAI_TOOL_SOCK: sockPath } } } }), { mode: 0o600 });
+    const agent = {
+      dir,
+      sessionId,
+      resume,
+      mcpConfig,
+      toolCalls: () => calls,
+      cleanup() {
+        try { server.close(); } catch { /* ignore */ }
+        if (!IS_WIN) { try { fs.unlinkSync(sockPath); } catch { /* ignore */ } }
+        try { fs.unlinkSync(mcpConfig); } catch { /* ignore */ }
+        for (const [id, w] of toolWaiters) { toolWaiters.delete(id); w({ ok: false, error: 'run ended' }); }
+      },
+    };
+    run({ ...req, backend: 'claude' }, agent);
   });
   return undefined;
 }
@@ -339,9 +456,13 @@ function childEnv(extra = {}) {
 
 // ------------------------------------------------------------ claude CLI ---
 
-function claudeSpec({ system, model, effort, web, runDir }) {
+function claudeSpec({ system, model, effort, web, runDir, agent = null }) {
   const sysFile = path.join(runDir, 'system.txt');
   fs.writeFileSync(sysFile, system || 'You are a helpful academic writing assistant.', { mode: 0o600 });
+  const allowed = [
+    ...(agent ? AGENT_TOOLS.map((n) => `mcp__overleaf__${n}`) : []),
+    ...(web ? ['WebSearch', ...WEB_DOMAINS.map((d) => `WebFetch(domain:${d})`)] : []),
+  ];
   const args = [
     '-p',
     '--output-format', 'stream-json',
@@ -349,13 +470,13 @@ function claudeSpec({ system, model, effort, web, runDir }) {
     '--include-partial-messages',
     // Explicit mode: a user's defaultMode (e.g. "auto") must not approve tools we did not allow.
     '--permission-mode', 'dontAsk',
-    // Pure text generation by default. Web actions get WebSearch + WebFetch limited to scholarly
-    // domains; file, shell and edit tools are never available.
-    ...(web
-      ? ['--tools', 'WebSearch,WebFetch', '--allowedTools', 'WebSearch', ...WEB_DOMAINS.map((d) => `WebFetch(domain:${d})`)]
-      : ['--tools', '']),
-    '--strict-mcp-config',       // skip MCP servers (faster start, no side effects)
-    '--no-session-persistence',
+    // No built-in file/shell/edit tools ever. Web actions add WebSearch + WebFetch limited to scholarly
+    // domains; agent mode adds only the Overleaf tools served by our MCP server.
+    '--tools', web ? 'WebSearch,WebFetch' : '',
+    ...(allowed.length ? ['--allowedTools', ...allowed] : []),
+    ...(agent ? ['--mcp-config', agent.mcpConfig] : []),
+    '--strict-mcp-config',       // only our MCP server (or none)
+    ...(agent ? (agent.resume ? ['--resume', agent.sessionId] : ['--session-id', agent.sessionId]) : ['--no-session-persistence']),
     '--disable-slash-commands',
     '--setting-sources', 'user', // no project/local settings from the working directory
     '--settings', '{"disableAllHooks":true}',
@@ -394,6 +515,8 @@ function claudeSpec({ system, model, effort, web, runDir }) {
         cur.text += e.delta.text;
         cb.delta(e.delta.text);
       }
+    } else if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
+      for (const b of ev.message.content) if (b && b.type === 'tool_use') cb.activity(String(b.name || '').replace(/^mcp__overleaf__/, ''), b.input || {});
     } else if (ev.type === 'result') {
       costUsd = ev.total_cost_usd;
       if (ev.is_error || (ev.subtype && ev.subtype !== 'success')) resultError = String(ev.result || ev.subtype || 'error');
@@ -420,7 +543,7 @@ function claudeSpec({ system, model, effort, web, runDir }) {
       });
     },
     result(code, signal, stderrTail) {
-      if (lineBuf.trim()) { onLine(lineBuf.trim(), cbRef || { delta() {}, reset() {}, status() {} }); lineBuf = ''; }
+      if (lineBuf.trim()) { onLine(lineBuf.trim(), cbRef || { delta() {}, reset() {}, status() {}, activity() {} }); lineBuf = ''; }
       if (resultError) return { error: 'CLI_ERROR', detail: resultError };
       const longest = messages.reduce((a, m) => (m.text.length > a.length ? m.text : a), '');
       if (resultText !== null) {

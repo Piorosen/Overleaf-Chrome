@@ -286,4 +286,23 @@ footer .ac select { height: 22px; font-size: 11.5px; border-radius: 5px; border:
 .bib-card details { margin-top: 4px; }
 .bib-card .diff { max-height: 220px; min-height: 0; font-size: 11.5px; }
 .bib-opt { display: inline-flex; gap: 6px; align-items: center; }
+.agent-view { display: flex; flex-direction: column; gap: 8px; }
+.agent-log { display: flex; flex-direction: column; gap: 8px; max-height: 40vh; overflow: auto; padding: 2px; }
+.msg { font-size: 12.5px; line-height: 1.5; }
+.msg.user { align-self: flex-end; max-width: 85%; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 10px 10px 2px 10px; padding: 6px 10px; white-space: pre-wrap; }
+.msg.assistant { border: 1px solid var(--border); border-radius: 10px 10px 10px 2px; padding: 6px 10px; background: var(--bg); }
+.msg.assistant .report { border: 0; padding: 0; background: transparent; max-height: none; min-height: 0; }
+.msg .acts { list-style: none; margin: 0 0 4px; padding: 0; color: var(--fg-muted); font-size: 11.5px; }
+.msg .acts li { padding: 1px 0; }
+.msg .err { color: var(--danger); }
+.agent-props { display: flex; flex-direction: column; gap: 6px; }
+.agent-props .prop.applied, .agent-props .prop.rejected, .agent-props .prop.stale { opacity: .6; }
+.agent-props .badge-st { font-size: 11px; color: var(--fg-muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+.agent-props .diff { max-height: 200px; min-height: 0; font-size: 11.5px; margin: 4px 0; }
+.agent-input { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding: 8px 0 2px; position: sticky; bottom: -14px; background: var(--bg); z-index: 1; }
+.agent-text { width: 100%; min-height: 60px; resize: vertical; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); font: inherit; color: var(--fg); }
+.agent-opt { display: inline-flex; gap: 4px; align-items: center; }
+.agent-meta { margin-left: 8px; }
+.followup input { flex: 1; }
+footer .usage { margin-left: auto; }
 `;

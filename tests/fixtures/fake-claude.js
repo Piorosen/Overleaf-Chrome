@@ -46,6 +46,32 @@ process.stdin.on('end', () => {
     process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'FINAL' })); // no trailing \n
     return;
   }
+  if (mode === 'agent') {
+    // Act like Claude Code in agent mode: start the MCP server from --mcp-config and call its tools.
+    const cfg = JSON.parse(fs.readFileSync(argv[argv.indexOf('--mcp-config') + 1], 'utf8')).mcpServers.overleaf;
+    const srv = spawn(cfg.command, cfg.args, { env: { ...process.env, ...cfg.env }, stdio: ['pipe', 'pipe', 'inherit'] });
+    let buf = '';
+    const waiters = new Map();
+    srv.stdout.on('data', (d) => { buf += d; let nl; while ((nl = buf.indexOf('\n')) >= 0) { const m = JSON.parse(buf.slice(0, nl)); buf = buf.slice(nl + 1); const w = waiters.get(m.id); if (w) { waiters.delete(m.id); w(m); } } });
+    let id = 0;
+    const rpc = (method, params) => new Promise((res) => { id += 1; waiters.set(id, res); srv.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`); });
+    (async () => {
+      await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'fake', version: '0' } });
+      const list = await rpc('tools/list', {});
+      const names = list.result.tools.map((t) => t.name);
+      const outs = [];
+      const calls = Number(process.env.FAKE_TOOL_CALLS || 2);
+      for (let k = 0; k < calls; k++) {
+        const name = k === 0 ? 'list_files' : 'read_file';
+        emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: `mcp__overleaf__${name}`, input: { path: 'main.tex' } }] } });
+        const r = await rpc('tools/call', { name, arguments: { path: 'main.tex' } });
+        outs.push(`${name}:${r.result.isError ? 'ERR:' : ''}${r.result.content[0].text}`);
+      }
+      srv.stdin.end();
+      emit({ type: 'result', subtype: 'success', is_error: false, result: `TOOLS=${names.length} ${outs.join(' | ')}` });
+    })();
+    return;
+  }
   if (mode === 'multi') {
     emit({ type: 'stream_event', event: { type: 'message_start' } });
     emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Let me search.' } } });

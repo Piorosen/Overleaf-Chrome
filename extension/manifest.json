@@ -2,12 +2,13 @@
   "manifest_version": 3,
   "name": "Overleaf AI (Claude / Codex CLI)",
   "short_name": "Overleaf AI",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Overleaf 에서만 동작하는 AI 글쓰기 도우미. 로컬 Claude Code CLI 또는 OpenAI Codex CLI 로 글을 작성·수정합니다.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvRkwnDZkYfy/EaaCIeXXwsc8EErr3PnKI+XB95Ymhai+OuZdy0//nKFSyQ6OelV9DFYcusvDJlD5NeESp2x2EyheLVUC8FgJFUD2urbfABm53645RX+LfyQne304zWS7Xl2EmdqsYl1gkM2JngkwRaZkVM70aZ8ql7Px5bsVfljEE/A+J+afS1c0dn03K8PyexsrplCBmI9AdxPp9g/YBRHfeLrCW+g8PgqutvWy0I8g3Vzojpov9IngmHzUSKRNryiJ4FbgNF3hnrTRlhQvQq4Ja09rzL9GUmP1jCgHVZOIrtI/i7GowiLhkaE4YBujOk5/bqOMYhXRRL9p7DtRVQIDAQAB",
   "permissions": [
     "nativeMessaging",
-    "storage"
+    "storage",
+    "contextMenus"
   ],
   "host_permissions": [
     "https://www.overleaf.com/*",

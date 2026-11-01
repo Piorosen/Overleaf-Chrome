@@ -20,7 +20,20 @@ chrome.runtime.onConnect.addListener((port) => {
   const toPort = (msg) => { try { port.postMessage(msg); } catch { /* tab gone */ } };
 
   port.onMessage.addListener((msg) => {
-    if (msg?.type === 'run') {
+    if (msg?.type === 'tool-result') {
+      // Agent mode: the content script answered a tool call — pass it to the bridge.
+      if (native) {
+        try {
+          native.postMessage({
+            type: 'tool-result', callId: Number(msg.callId), ok: msg.ok === true,
+            result: typeof msg.result === 'string' ? msg.result.slice(0, 300000) : undefined,
+            error: typeof msg.error === 'string' ? msg.error.slice(0, 2000) : undefined,
+          });
+        } catch { /* closed */ }
+      }
+      return;
+    }
+    if (msg?.type === 'run' || msg?.type === 'agent') {
       closeNative();
       settled = false;
       try {
@@ -46,6 +59,22 @@ chrome.runtime.onConnect.addListener((port) => {
       });
       // Rebuild the request field by field: only these reach the bridge (no CLI flags from pages).
       const r = msg.request || {};
+      if (msg.type === 'agent') {
+        native.postMessage({
+          type: 'agent',
+          projectKey: String(r.projectKey || '').slice(0, 64),
+          sessionId: typeof r.sessionId === 'string' ? r.sessionId : '',
+          newSession: r.newSession === true,
+          model: typeof r.model === 'string' ? r.model : '',
+          effort: typeof r.effort === 'string' ? r.effort : '',
+          web: r.web === true,
+          timeoutSec: Number(r.timeoutSec) || 600,
+          maxToolCalls: Number(r.maxToolCalls) || 40,
+          system: typeof r.system === 'string' ? r.system : '',
+          prompt: typeof r.prompt === 'string' ? r.prompt : '',
+        });
+        return;
+      }
       native.postMessage({
         type: 'run',
         backend: r.backend === 'codex' ? 'codex' : 'claude',
@@ -99,4 +128,18 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   if (!target) [target] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!target?.id || !OVERLEAF_PROJECT.test(target.url || '')) return;
   chrome.tabs.sendMessage(target.id, { type: 'command', command }).catch(() => {});
+});
+
+// Right-click menu on selected text in Overleaf.
+const MENU_PATTERNS = ['https://www.overleaf.com/project/*', 'https://overleaf.com/project/*', 'https://www.overleaf.com/Project/*', 'https://overleaf.com/Project/*'];
+const MENU = [['polish', '다듬기'], ['grammar', '문법 교정'], ['concise', '간결하게'], ['academic', '학술체로'], ['to-en', '한→영'], ['to-ko', '영→한'], ['ko-spell', '한국어 맞춤법'], ['explain-ko', '한국어로 설명'], ['cite-needed', '인용 필요 위치'], ['agent', '에이전트에게 맡기기…']];
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({ id: 'olai', title: 'Overleaf AI', contexts: ['selection'], documentUrlPatterns: MENU_PATTERNS });
+    for (const [id, title] of MENU) chrome.contextMenus.create({ id: `olai:${id}`, parentId: 'olai', title, contexts: ['selection'], documentUrlPatterns: MENU_PATTERNS });
+  });
+});
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (!tab?.id || !String(info.menuItemId).startsWith('olai:')) return;
+  chrome.tabs.sendMessage(tab.id, { type: 'command', command: 'action', actionId: String(info.menuItemId).slice(5) }).catch(() => {});
 });

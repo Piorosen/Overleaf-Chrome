@@ -24,7 +24,8 @@ function tmpdir() {
 }
 
 // Send one request; collect messages until a terminal message (or the host exits).
-function talk(request, env = {}, config = {}) {
+// onToolCall(name, args) answers agent tool calls like the extension would.
+function talk(request, env = {}, config = {}, onToolCall = null) {
   const tmp = tmpdir();
   const cfg = path.join(tmp, 'config.json');
   fs.writeFileSync(cfg, JSON.stringify({ claudePath: path.join(FIX, 'fake-claude.js'), codexPath: path.join(FIX, 'fake-codex.js'), ...config }));
@@ -46,6 +47,11 @@ function talk(request, env = {}, config = {}) {
         const m = JSON.parse(buf.subarray(4, 4 + len).toString('utf8'));
         buf = buf.subarray(4 + len);
         msgs.push(m);
+        if (m.type === 'tool-call' && onToolCall) {
+          let r;
+          try { r = { ok: true, result: onToolCall(m.name, m.args) }; } catch (e) { r = { ok: false, error: e.message }; }
+          proc.stdin.write(frame({ type: 'tool-result', callId: m.callId, ...r }));
+        }
         if (['done', 'error', 'pong', 'bib-result'].includes(m.type)) proc.stdin.end(); // like Chrome disconnecting
       }
     });
@@ -68,8 +74,8 @@ test('ping reports version, capabilities and both CLIs', async () => {
   const { msgs, code } = await talk({ type: 'ping' });
   assert.equal(code, 0);
   const pong = msgs.find((m) => m.type === 'pong');
-  assert.equal(pong.hostVersion, '0.4.0');
-  for (const cap of ['web-allowlist', 'bib', 'pgkill']) assert.ok(pong.caps.includes(cap), cap);
+  assert.equal(pong.hostVersion, '0.5.0');
+  for (const cap of ['web-allowlist', 'bib', 'pgkill', 'agent']) assert.ok(pong.caps.includes(cap), cap);
   assert.equal(pong.claude.ok, true);
   assert.match(pong.claude.version, /Fake Claude/);
   assert.equal(typeof pong.claude.defaults, 'object');
@@ -260,4 +266,36 @@ test('bib lookups: arXiv, Semantic Scholar (retry on 429), OpenAlex, DOI BibTeX,
   } finally {
     api.server.close();
   }
+});
+
+test('agent mode: MCP tools relayed to the extension, session ids, budget, cleanup', async () => {
+  const seen = [];
+  const handler = (name, args) => { seen.push(name); if (name === 'list_files') return 'main.tex (open)'; return `1| content of ${args.path}`; };
+  const first = await talk({ type: 'agent', projectKey: 'proj12345', system: 'S', prompt: 'do it' }, { FAKE_MODE: 'agent' }, {}, handler);
+  const done = first.msgs.at(-1);
+  assert.equal(done.type, 'done', JSON.stringify(first.msgs.at(-1)));
+  assert.match(finalText(first.msgs), /^TOOLS=9 list_files:main\.tex \(open\) \| read_file:1\| content of main\.tex$/);
+  assert.deepEqual(seen, ['list_files', 'read_file']);
+  assert.equal(first.msgs.filter((m) => m.type === 'activity').map((m) => m.name).join(','), 'list_files,read_file');
+  const session = first.msgs.find((m) => m.type === 'session').sessionId;
+  assert.match(session, /^[0-9a-f-]{36}$/);
+  assert.equal(done.sessionId, session);
+  const a = first.record.args;
+  assert.equal(a[a.indexOf('--session-id') + 1], session);
+  assert.ok(!a.includes('--no-session-persistence'));
+  assert.equal(a[a.indexOf('--tools') + 1], '');
+  assert.ok(a.includes('mcp__overleaf__propose_edit'));
+  assert.ok(!a.some((x) => /^(Bash|Edit|Write|Read)$/.test(x)));
+  assert.match(first.record.cwd, /work\/agent-proj12345$/);
+  assert.ok(first.leftovers.every((f) => f === 'agent-proj12345'), `leftovers: ${first.leftovers}`); // socket + run dir removed
+
+  // resume the same conversation; tool budget enforced
+  const second = await talk({ type: 'agent', projectKey: 'proj12345', sessionId: session, system: 'S', prompt: 'more', maxToolCalls: 1 }, { FAKE_MODE: 'agent' }, {}, handler);
+  const b = second.record.args;
+  assert.equal(b[b.indexOf('--resume') + 1], session);
+  assert.ok(!b.includes('--session-id'));
+  assert.match(finalText(second.msgs), /read_file:ERR:Error: tool budget of 1 calls exhausted/);
+
+  const bad = await talk({ type: 'agent', projectKey: '../etc', system: 'S', prompt: 'x' });
+  assert.equal(bad.msgs.at(-1).error, 'BAD_REQUEST');
 });

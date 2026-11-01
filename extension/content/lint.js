@@ -377,6 +377,61 @@
     return issues;
   }
 
+  // Word counts (prose only) per section, abstract length, figures/tables/equations/citations.
+  function documentStats(doc) {
+    const noComments = maskComments(doc);
+    const prose = maskForProse(noComments)
+      .replace(/\b(?:https?:\/\/|www\.)[^\s{}]+/g, (u) => `U${' '.repeat(u.length - 1)}`) // a bare URL is one word
+      .replace(/\\[A-Za-z@]+\*?/g, (c) => ' '.repeat(c.length)).replace(/[{}[\]~]/g, ' '); // same length: offsets stay valid
+    const words = (from, to) => (prose.slice(from, to).match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length;
+    const begin = Math.max(0, bodyStartOf(noComments));
+    const endDoc = noComments.search(/\\end\{document\}/);
+    const end = endDoc < 0 ? doc.length : endDoc;
+    const heads = [];
+    const re = /\\(chapter|section|subsection)\*?\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}/g;
+    let m;
+    while ((m = re.exec(noComments))) if (m.index >= begin && m.index < end) heads.push({ level: m[1], title: m[2].trim(), at: m.index, body: m.index + m[0].length });
+    // Section word counts exclude the heading itself (as texcount reports text words).
+    const sections = heads.map((h, i) => ({ level: h.level, title: h.title, at: h.at, words: words(h.body, i + 1 < heads.length ? heads[i + 1].at : end) }));
+    const ab = /\\begin\{abstract\}([\s\S]*?)\\end\{abstract\}/.exec(noComments);
+    const count = (r) => (noComments.match(r) || []).length;
+    const cites = new Set();
+    for (const c of noComments.matchAll(/\\[Cc]ite\w*\*?(?:\[[^\]]*\])*\{([^}]*)\}/g)) c[1].split(',').map((k) => k.trim()).filter(Boolean).forEach((k) => cites.add(k));
+    return {
+      total: words(begin, end),
+      beforeFirstSection: heads.length ? words(begin, heads[0].at) : 0,
+      abstract: ab ? words(ab.index, ab.index + ab[0].length) : null,
+      sections,
+      figures: count(/\\begin\{figure\*?\}/g),
+      tables: count(/\\begin\{table\*?\}/g),
+      equations: count(/\\begin\{(equation|align|gather|multline)\*?\}/g),
+      citations: cites.size,
+    };
+  }
+
+  // Things that de-anonymize a double-blind submission.
+  function anonymityIssues(doc) {
+    const issues = [];
+    const starts = lineStarts(doc);
+    const noComments = maskComments(doc);
+    const add = (severity, at, message) => {
+      const line = lineOf(starts, at);
+      const e = doc.indexOf('\n', at);
+      issues.push({ rule: 'anonymity', severity, line, from: at, to: at, message, excerpt: doc.slice(starts[line - 1], e < 0 ? doc.length : e).trim().slice(0, 120) });
+    };
+    for (const m of noComments.matchAll(/\\author\s*(?:\[[^\]]*\])?\s*\{/g)) {
+      const close = matchBrace(noComments, m.index + m[0].length - 1);
+      const body = noComments.slice(m.index + m[0].length, close < 0 ? m.index + 200 : close);
+      if (!/anonymous|author names? (withheld|hidden)|blind|submission/i.test(body) && /[A-Za-z\uAC00-\uD7A3]{2,}/.test(body.replace(/\\[A-Za-z]+/g, ''))) add('warn', m.index, '저자 이름이 보입니다 — 이중맹검 원고에서는 익명 처리하세요');
+    }
+    for (const m of noComments.matchAll(/\\(thanks|email|affiliation|affil|institute|orcid|orcidlink)\b/g)) add('warn', m.index, `\\${m[1]} 가 신원을 드러낼 수 있습니다`);
+    for (const m of noComments.matchAll(/\b(our|my) (previous|prior|earlier|recent) (work|paper|study|studies|papers|results?)\b|\bwe (previously|earlier) (showed|proposed|introduced|presented)\b|\bin our (previous|prior|earlier) (work|paper)\b/gi)) add('warn', m.index, `자기 인용이 드러남: "${m[0]}" — 3인칭으로 인용하세요 (예: "Smith et al. showed")`);
+    for (const m of noComments.matchAll(/https?:\/\/(?:www\.)?(github\.com|gitlab\.com|bitbucket\.org|huggingface\.co|drive\.google\.com|dropbox\.com|sites\.google\.com)\/[^\s}]+/gi)) add('warn', m.index, `신원이 드러나는 링크: ${m[1]} — 익명 링크(anonymous.4open.science 등)를 쓰세요`);
+    for (const m of noComments.matchAll(/\\section\*?\{\s*(Acknowledg\w*|감사의 글|사사)\s*\}|\\begin\{ack(nowledg\w*)?\}/gi)) add('warn', m.index, '감사의 글은 심사용 원고에서 빼거나 숨기세요');
+    for (const m of noComments.matchAll(/pdfauthor\s*=\s*\{?[^,}\s][^,}]*/g)) add('info', m.index, 'PDF 메타데이터(pdfauthor)에 저자 정보가 들어갈 수 있습니다');
+    return issues;
+  }
+
   function summarize(issues, max = 60) {
     return issues.slice(0, max).map((i) => `L${i.line} [${i.severity}] ${i.message}`).join('\n') + (issues.length > max ? `\n… ${issues.length - max} more` : '');
   }
@@ -388,7 +443,7 @@
   }
 
   const api = {
-    lintLatex, summarize, counts, maskComments, maskCode, maskMath, maskForProse, blankCommandArgs, matchBrace, bodyStartOf, sentences,
+    lintLatex, summarize, counts, documentStats, anonymityIssues, maskComments, maskCode, maskMath, maskForProse, blankCommandArgs, matchBrace, bodyStartOf, sentences,
     KEY_COMMANDS, DEFINITION_COMMANDS,
   };
   root.OLAI_LINT = api;
