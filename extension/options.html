@@ -54,13 +54,8 @@
         <label>Codex 사용자 지정 모델 (한 줄에 하나)
           <textarea id="codexCustomModels" rows="2" placeholder="터미널에서 codex 실행 후 /model 로 확인한 이름"></textarea>
         </label>
-        <label>Claude 추가 인자
-          <input id="claudeExtraArgs" placeholder='예: --fallback-model claude-sonnet-5-5'>
-        </label>
-        <label>Codex 추가 인자
-          <input id="codexExtraArgs" placeholder='예: -c model_verbosity="low"'>
-        </label>
       </div>
+      <p class="muted">CLI 추가 인자는 보안상 확장에서 보내지 않습니다. 필요하면 <code>~/Library/Application Support/overleaf-ai-host/config.json</code> 에 <code>"claudeExtraArgs": ["--fallback-model", "claude-sonnet-5-5"]</code> 처럼 직접 적으세요. 같은 파일의 <code>"s2ApiKey"</code> 로 Semantic Scholar API 키를 넣을 수 있습니다.</p>
       <p class="muted"><b>자동</b> 사고 수준은 작업 종류에 맞춰 고릅니다: 교정·번역은 low, 작성·생성은 medium, 검토·오류 해결은 high. 모델이 지원하지 않는 단계는 가까운 단계로 바뀝니다.</p>
     </section>
 

@@ -2,35 +2,98 @@
   "manifest_version": 3,
   "name": "Overleaf AI (Claude / Codex CLI)",
   "short_name": "Overleaf AI",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Overleaf 에서만 동작하는 AI 글쓰기 도우미. 로컬 Claude Code CLI 또는 OpenAI Codex CLI 로 글을 작성·수정합니다.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvRkwnDZkYfy/EaaCIeXXwsc8EErr3PnKI+XB95Ymhai+OuZdy0//nKFSyQ6OelV9DFYcusvDJlD5NeESp2x2EyheLVUC8FgJFUD2urbfABm53645RX+LfyQne304zWS7Xl2EmdqsYl1gkM2JngkwRaZkVM70aZ8ql7Px5bsVfljEE/A+J+afS1c0dn03K8PyexsrplCBmI9AdxPp9g/YBRHfeLrCW+g8PgqutvWy0I8g3Vzojpov9IngmHzUSKRNryiJ4FbgNF3hnrTRlhQvQq4Ja09rzL9GUmP1jCgHVZOIrtI/i7GowiLhkaE4YBujOk5/bqOMYhXRRL9p7DtRVQIDAQAB",
-  "permissions": ["nativeMessaging", "storage"],
-  "host_permissions": ["https://www.overleaf.com/*", "https://overleaf.com/*"],
+  "permissions": [
+    "nativeMessaging",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.overleaf.com/*",
+    "https://overleaf.com/*"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "content_scripts": [
     {
-      "matches": ["https://www.overleaf.com/project/*", "https://overleaf.com/project/*"],
-      "js": ["content/main-world.js"],
+      "matches": [
+        "https://www.overleaf.com/project/*",
+        "https://overleaf.com/project/*",
+        "https://www.overleaf.com/Project/*",
+        "https://overleaf.com/Project/*"
+      ],
+      "exclude_matches": [
+        "https://www.overleaf.com/project/*/detached*",
+        "https://overleaf.com/project/*/detached*",
+        "https://www.overleaf.com/Project/*/detached*",
+        "https://overleaf.com/Project/*/detached*"
+      ],
+      "js": [
+        "content/bridge.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.overleaf.com/project/*",
+        "https://overleaf.com/project/*",
+        "https://www.overleaf.com/Project/*",
+        "https://overleaf.com/Project/*"
+      ],
+      "exclude_matches": [
+        "https://www.overleaf.com/project/*/detached*",
+        "https://overleaf.com/project/*/detached*",
+        "https://www.overleaf.com/Project/*/detached*",
+        "https://overleaf.com/Project/*/detached*"
+      ],
+      "js": [
+        "content/main-world.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://www.overleaf.com/project/*", "https://overleaf.com/project/*"],
-      "js": ["content/catalog.js", "content/prompts.js", "content/diff.js", "content/lint.js", "content/markdown.js", "content/packages.js", "content/terms.js", "content/panel-css.js", "content/content.js"],
+      "matches": [
+        "https://www.overleaf.com/project/*",
+        "https://overleaf.com/project/*",
+        "https://www.overleaf.com/Project/*",
+        "https://overleaf.com/Project/*"
+      ],
+      "exclude_matches": [
+        "https://www.overleaf.com/project/*/detached*",
+        "https://overleaf.com/project/*/detached*",
+        "https://www.overleaf.com/Project/*/detached*",
+        "https://overleaf.com/Project/*/detached*"
+      ],
+      "js": [
+        "content/catalog.js",
+        "content/prompts.js",
+        "content/diff.js",
+        "content/lint.js",
+        "content/markdown.js",
+        "content/packages.js",
+        "content/terms.js",
+        "content/bib.js",
+        "content/panel-css.js",
+        "content/content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "commands": {
     "toggle-panel": {
-      "suggested_key": { "default": "Alt+Shift+A" },
+      "suggested_key": {
+        "default": "Alt+Shift+A"
+      },
       "description": "AI 패널 열기/닫기"
     },
     "quick-action": {
-      "suggested_key": { "default": "Alt+Shift+I" },
+      "suggested_key": {
+        "default": "Alt+Shift+I"
+      },
       "description": "빠른 실행: 선택 영역 다듬기 / '% ai:' 지시문 실행"
     }
   },

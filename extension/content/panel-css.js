@@ -274,4 +274,16 @@ button.jump { border: 0; background: var(--accent-soft); color: var(--accent); b
 .pkg-prompt code { background: var(--bg); }
 footer .ac { display: inline-flex; gap: 4px; align-items: center; }
 footer .ac select { height: 22px; font-size: 11.5px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg); padding: 0 2px; }
+.safety { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); font-size: 12px; }
+.safety ul { margin: 4px 0 0; padding-left: 18px; }
+.safety li.info { color: var(--fg-muted); }
+.bib-view { display: flex; flex-direction: column; gap: 8px; }
+.bib-results { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow: auto; }
+.bib-card, .bib-cand { border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; background: var(--bg); font-size: 12.5px; }
+.bib-card .bib-cand { margin-top: 6px; background: var(--bg-sunk); }
+.bib-key { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.bib-cand .tag { font-size: 10.5px; border: 1px solid var(--border); border-radius: 4px; padding: 0 3px; }
+.bib-card details { margin-top: 4px; }
+.bib-card .diff { max-height: 220px; min-height: 0; font-size: 11.5px; }
+.bib-opt { display: inline-flex; gap: 6px; align-items: center; }
 `;

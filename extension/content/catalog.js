@@ -234,6 +234,16 @@
       desc: '텍스트 참고문헌을 BibTeX로 변환',
       instruction: 'Convert these plain-text references into BibTeX entries with keys of the form authorYEARfirstword. Use only information present in the text; omit unknown fields rather than guessing.' },
 
+    // ---- 문헌: BibTeX 관리 (공식 메타데이터 API, AI 없음)
+    { id: 'bib-add', cat: 'refs', label: 'BibTeX 추가', kind: 'bib', mode: 'add',
+      desc: 'DOI·arXiv ID·제목으로 정확한 BibTeX 를 찾아 .bib 에 추가하고 커서에 \\cite{키} 를 넣음' },
+    { id: 'bib-missing', cat: 'refs', label: '누락 인용 채우기', kind: 'bib', mode: 'missing',
+      desc: '원고의 \\cite 키 중 .bib 에 없는 것을 찾아 키 이름·문맥으로 논문을 찾아 같은 키로 추가' },
+    { id: 'bib-upgrade', cat: 'refs', label: 'arXiv → 출판본', kind: 'bib', mode: 'upgrade',
+      desc: 'arXiv·프리프린트로 인용한 논문이 학회·저널에 실렸는지 확인하고 같은 키로 정정' },
+    { id: 'bib-audit', cat: 'refs', label: 'BibTeX 점검', kind: 'bib', mode: 'audit',
+      desc: '중복 항목·미사용 항목·필수 필드 누락·대문자 보호(약어) 점검' },
+
     // ---- 문헌 (Claude + web search)
     { id: 'cite-needed', cat: 'refs', label: '인용 필요 위치', kind: 'report', effort: 'medium', scope: 'section',
       desc: '근거·인용이 필요한 문장과 검색 키워드',

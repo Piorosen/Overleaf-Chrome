@@ -2,7 +2,7 @@
 // Bridges content-script ports to the Native Messaging host and routes keyboard commands.
 
 const HOST_NAME = 'com.olai.cli_bridge';
-const OVERLEAF_PROJECT = /^https:\/\/(www\.)?overleaf\.com\/project\//;
+const OVERLEAF_PROJECT = /^https:\/\/(www\.)?overleaf\.com\/[pP]roject\/(?!.*\/detached)/;
 
 // One port per run. The content script sends {type:'run', request} or {type:'cancel'}.
 // Each run gets its own host process; disconnecting it kills the CLI.
@@ -44,7 +44,18 @@ chrome.runtime.onConnect.addListener((port) => {
           toPort({ type: 'error', error: 'NATIVE_DISCONNECTED', detail: err || '호스트 프로세스가 예기치 않게 종료되었습니다.' });
         }
       });
-      native.postMessage({ type: 'run', ...msg.request });
+      // Rebuild the request field by field: only these reach the bridge (no CLI flags from pages).
+      const r = msg.request || {};
+      native.postMessage({
+        type: 'run',
+        backend: r.backend === 'codex' ? 'codex' : 'claude',
+        model: typeof r.model === 'string' ? r.model : '',
+        effort: typeof r.effort === 'string' ? r.effort : '',
+        web: r.web === true,
+        timeoutSec: Number(r.timeoutSec) || 180,
+        system: typeof r.system === 'string' ? r.system : '',
+        prompt: typeof r.prompt === 'string' ? r.prompt : '',
+      });
     } else if (msg?.type === 'cancel') {
       settled = true;
       closeNative();
@@ -63,6 +74,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       else sendResponse({ ok: true, ...resp });
     });
     return true; // async response
+  }
+  if (msg?.type === 'bib') {
+    // Bibliographic metadata lookups (arXiv / Semantic Scholar / OpenAlex / DOI / Crossref) via the bridge.
+    const q = msg.query || {};
+    const allowed = ['arxiv', 'arxiv-search', 's2', 'openalex-work', 'openalex-search', 'doi-bib', 'crossref-search'];
+    if (!allowed.includes(q.op)) { sendResponse({ ok: false, error: 'bad op' }); return false; }
+    const req = { type: 'bib', op: q.op, ids: Array.isArray(q.ids) ? q.ids.slice(0, 100).map(String) : undefined, q: typeof q.q === 'string' ? q.q : undefined, id: typeof q.id === 'string' ? q.id : undefined, doi: typeof q.doi === 'string' ? q.doi : undefined, max: Number(q.max) || undefined };
+    chrome.runtime.sendNativeMessage(HOST_NAME, req, (resp) => {
+      const err = chrome.runtime.lastError?.message;
+      if (err) sendResponse({ ok: false, error: err });
+      else sendResponse(resp && resp.type === 'bib-result' ? resp : { ok: false, error: resp?.error || 'no response' });
+    });
+    return true;
   }
   if (msg?.type === 'open-options') {
     chrome.runtime.openOptionsPage();

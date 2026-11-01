@@ -4,8 +4,9 @@
   const P = globalThis.OLAI;
   const C = globalThis.OLAI_CATALOG;
   const $ = (id) => document.getElementById(id);
+  const LOCAL_KEYS = ['styleGuide', 'customPresets', 'claudeCustomModels', 'codexCustomModels', 'lastCategory'];
   const FIELDS = ['claudeModel', 'claudeEffort', 'codexModel', 'codexEffort', 'claudeCustomModels', 'codexCustomModels',
-    'claudeExtraArgs', 'codexExtraArgs', 'styleGuide', 'customPresets', 'explainLang', 'contextChars', 'timeoutSec',
+    'styleGuide', 'customPresets', 'explainLang', 'contextChars', 'timeoutSec',
     'includeFullDoc', 'allowWeb', 'autoLint', 'quickActionId', 'autoApplyQuick', 'showLauncher',
     'autocomplete', 'acModel', 'acEffort', 'acDelayMs', 'acMaxWords'];
 
@@ -109,10 +110,15 @@
 
   function save(key, value) {
     settings[key] = value;
-    chrome.storage.sync.set({ [key]: value }).then(() => {
+    const area = LOCAL_KEYS.includes(key) ? chrome.storage.local : chrome.storage.sync;
+    area.set({ [key]: value }).then(() => {
       $('saved').textContent = '저장됨';
+      $('saved').classList.remove('bad');
       clearTimeout(savedTimer);
       savedTimer = setTimeout(() => { $('saved').textContent = ''; }, 1500);
+    }).catch((e) => {
+      $('saved').textContent = `저장 실패: ${e && e.message ? e.message : e}`;
+      $('saved').classList.add('bad');
     });
     if (key === 'customPresets') fillQuickActions();
     if (key === 'claudeModel' || key === 'claudeCustomModels') { fillModels('claude'); fillEfforts('claude'); }
@@ -127,10 +133,13 @@
   for (const k of FIELDS) {
     const el = $(k);
     const evt = el.tagName === 'SELECT' || el.type === 'checkbox' ? 'change' : 'input';
+    let t = 0;
     el.addEventListener(evt, () => {
       let v = el.type === 'checkbox' ? el.checked : el.value;
       if (el.type === 'number') v = Number(v) || P.DEFAULT_SETTINGS[k];
-      save(k, v);
+      clearTimeout(t);
+      // Text fields: save after typing pauses (sync storage allows only ~120 writes per minute).
+      if (evt === 'input') t = setTimeout(() => save(k, v), 600); else save(k, v);
     });
   }
 
@@ -179,8 +188,10 @@
   }
   $('test').addEventListener('click', testConnection);
 
-  chrome.storage.sync.get(P.DEFAULT_SETTINGS).then((s) => {
-    settings = { ...P.DEFAULT_SETTINGS, ...s };
+  Promise.all([chrome.storage.sync.get(null), chrome.storage.local.get(LOCAL_KEYS)]).then(([syncAll, loc]) => {
+    const fromSync = Object.fromEntries(Object.entries(syncAll).filter(([k]) => k in P.DEFAULT_SETTINGS && !LOCAL_KEYS.includes(k)));
+    const legacy = Object.fromEntries(LOCAL_KEYS.filter((k) => syncAll[k] !== undefined && loc[k] === undefined).map((k) => [k, syncAll[k]]));
+    settings = { ...P.DEFAULT_SETTINGS, ...fromSync, ...legacy, ...loc };
     render();
     testConnection();
   });

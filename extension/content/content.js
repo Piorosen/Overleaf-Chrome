@@ -11,6 +11,7 @@
   const M = globalThis.OLAI_MD;
   const K = globalThis.OLAI_PKG;
   const T = globalThis.OLAI_TERMS;
+  const B = globalThis.OLAI_BIB;
   const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
   const ALT = IS_MAC ? '⌥' : 'Alt';
@@ -21,41 +22,74 @@
 
   // ------------------------------------------------------------- settings ---
 
+  // Large or frequently-written fields live in storage.local (sync has 8 KB/item and 120 writes/min).
+  const LOCAL_KEYS = ['styleGuide', 'customPresets', 'claudeCustomModels', 'codexCustomModels', 'lastCategory'];
   let settings = { ...P.DEFAULT_SETTINGS };
   let profile = {};
   let cliInfo = null;
-  chrome.storage.sync.get(P.DEFAULT_SETTINGS)
-    .then((s) => { settings = { ...P.DEFAULT_SETTINGS, ...s }; currentCat = settings.lastCategory || 'edit'; onSettingsChanged(); })
-    .catch(() => {});
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'sync') return;
-    for (const [k, c] of Object.entries(changes)) settings[k] = c.newValue === undefined ? P.DEFAULT_SETTINGS[k] : c.newValue;
+  const alive = () => { try { return !!chrome.runtime?.id; } catch { return false; } };
+  Promise.all([chrome.storage.sync.get(null), chrome.storage.local.get(LOCAL_KEYS)]).then(([syncAll, loc]) => {
+    const moved = {};
+    for (const k of LOCAL_KEYS) if (syncAll[k] !== undefined && loc[k] === undefined) moved[k] = syncAll[k];
+    if (Object.keys(moved).length) {
+      chrome.storage.local.set(moved).then(() => chrome.storage.sync.remove(Object.keys(moved))).catch(() => {});
+      Object.assign(loc, moved);
+    }
+    const fromSync = Object.fromEntries(Object.entries(syncAll).filter(([k]) => k in P.DEFAULT_SETTINGS && !LOCAL_KEYS.includes(k)));
+    settings = { ...P.DEFAULT_SETTINGS, ...fromSync, ...loc };
+    currentCat = settings.lastCategory || 'edit';
     onSettingsChanged();
+  }).catch(() => {});
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes[PROFILE_KEY]) { profile = changes[PROFILE_KEY].newValue || {}; renderProfile(); }
+    let touched = false;
+    for (const [k, c] of Object.entries(changes)) {
+      if (!(k in P.DEFAULT_SETTINGS)) continue;
+      if ((area === 'local') !== LOCAL_KEYS.includes(k)) continue;
+      const nv = c.newValue === undefined ? P.DEFAULT_SETTINGS[k] : c.newValue;
+      if (JSON.stringify(nv) === JSON.stringify(settings[k])) continue; // our own write echoing back
+      settings[k] = nv;
+      touched = true;
+    }
+    if (touched) onSettingsChanged();
   });
   function saveSetting(key, value) {
     settings[key] = value;
-    chrome.storage.sync.set({ [key]: value }).catch(() => {});
+    if (!alive()) { showNotice('확장 프로그램이 업데이트되었습니다. 페이지를 새로고침하세요.'); return; }
+    try { (LOCAL_KEYS.includes(key) ? chrome.storage.local : chrome.storage.sync).set({ [key]: value }).catch(() => {}); } catch { /* context gone */ }
   }
   const allActions = () => [...C.ACTIONS, ...P.parseCustomPresets(settings.customPresets)];
   const backendNow = () => (settings.backend === 'codex' ? 'codex' : 'claude');
 
   // ------------------------------------------------ main-world (editor) RPC ---
 
+  // Private channel to main-world.js (see bridge.js): CustomEvents on a detached node.
   let rpcSeq = 0;
   const pending = new Map();
-  window.addEventListener('message', (e) => {
-    if (e.source !== window || !e.data || e.data.channel !== 'olai:mw->cs') return;
-    const p = pending.get(e.data.id);
-    if (!p) return;
-    pending.delete(e.data.id);
-    if (e.data.ok) p.resolve(e.data.result); else p.reject(new Error(e.data.error));
-  });
+  const bridge = globalThis.__olaiBridge;
+  const mwListeners = [];
+  if (bridge) {
+    bridge.node.addEventListener('olai-res', (e) => {
+      let d;
+      try { d = JSON.parse(e.detail); } catch { return; }
+      const p = pending.get(d.id);
+      if (!p) return;
+      pending.delete(d.id);
+      if (d.ok) p.resolve(d.result); else p.reject(new Error(d.error));
+    });
+    bridge.node.addEventListener('olai-evt', (e) => {
+      let d;
+      try { d = JSON.parse(e.detail); } catch { return; }
+      for (const fn of mwListeners) { try { fn(d); } catch { /* ignore */ } }
+    });
+  }
   function mw(cmd, args = {}, timeoutMs = 5000) {
     return new Promise((resolve, reject) => {
+      if (!bridge || !bridge.ready) { reject(new Error('BRIDGE_MISSING')); return; }
       const id = `olai-${Date.now()}-${++rpcSeq}`;
       pending.set(id, { resolve, reject });
       setTimeout(() => { if (pending.delete(id)) reject(new Error('MAIN_WORLD_TIMEOUT')); }, timeoutMs);
-      window.postMessage({ channel: 'olai:cs->mw', id, cmd, args }, location.origin);
+      bridge.node.dispatchEvent(new CustomEvent('olai-req', { detail: JSON.stringify({ id, cmd, args }) }));
     });
   }
 
@@ -102,6 +136,7 @@
           <input class="search" type="search" placeholder="기능 검색 — 예: 초록, 표, 리뷰, 인용" aria-label="기능 검색">
           <div class="actions"></div>
           <div class="lint-view" hidden></div>
+          <div class="bib-view" hidden></div>
           <div class="custom">
             <div class="row">
               <button class="seg on" type="button" data-mode="edit" title="선택 영역을 고치거나, 커서 위치에 새로 씁니다">수정·작성</button>
@@ -128,6 +163,7 @@
             <div class="status"><span class="spinner"></span><span class="status-text"></span><span class="grow"></span><button class="btn sm stop" type="button">중지</button></div>
             <pre class="err-detail" hidden></pre>
             <div class="explain" hidden></div>
+            <div class="safety" hidden></div>
             <div class="tabs" role="tablist" hidden>
               <button class="tab" type="button" role="tab" data-tab="diff">변경사항</button>
               <button class="tab" type="button" role="tab" data-tab="text">결과 (편집 가능)</button>
@@ -183,8 +219,8 @@
     allOn: $('.all-on'), allOff: $('.all-off'), diff: $('.diff'), out: $('.out'), variants: $('.variants'), report: $('.report'),
     resultActions: $('.result-actions'), applyBtn: $('.apply'), afterBtn: $('.after'), commentBtn: $('.comment'),
     bibBtn: $('.bib'), copyBtn: $('.copy'), retryBtn: $('.retry'), toast: $('.toast'),
-    glossaryBtn: $('.glossary-save'), pkgPrompt: $('.pkg-prompt'), pkgMsg: $('.pkg-msg'), pkgAdd: $('.pkg-add'),
-    pkgCopy: $('.pkg-copy'), pkgDismiss: $('.pkg-dismiss'), acMode: $('.ac-mode'),
+    bibView: $('.bib-view'), glossaryBtn: $('.glossary-save'), pkgPrompt: $('.pkg-prompt'), pkgMsg: $('.pkg-msg'), pkgAdd: $('.pkg-add'),
+    pkgCopy: $('.pkg-copy'), pkgDismiss: $('.pkg-dismiss'), acMode: $('.ac-mode'), safety: $('.safety'),
   };
   ui.body.style.position = 'relative';
 
@@ -195,6 +231,7 @@
   let searchQuery = '';
   let instrMode = 'edit';
 
+  let lastBackend = null;
   function onSettingsChanged() {
     ui.launcher.hidden = !settings.showLauncher || !ui.panel.hidden;
     ui.acMode.value = settings.autocomplete || 'auto';
@@ -203,7 +240,8 @@
     renderCats();
     renderActions();
     renderModeHint();
-    if (!ui.panel.hidden) checkConnection();
+    if (!ui.panel.hidden && lastBackend !== null && lastBackend !== settings.backend) checkConnection();
+    lastBackend = settings.backend;
   }
 
   let toastTimer = 0;
@@ -264,7 +302,7 @@
     ui.effort.title = supported.length ? '사고 수준(effort). 자동: 교정 low · 작성 medium · 검토 high' : '이 모델은 effort 설정을 지원하지 않습니다';
   }
 
-  ui.backend.addEventListener('change', () => { saveSetting('backend', ui.backend.value); renderModelBar(); renderActions(); checkConnection(); });
+  ui.backend.addEventListener('change', () => { saveSetting('backend', ui.backend.value); renderModelBar(); renderActions(); });
   ui.model.addEventListener('change', () => { saveSetting(backendNow() === 'codex' ? 'codexModel' : 'claudeModel', ui.model.value); renderEffort(); });
   ui.effort.addEventListener('change', () => saveSetting(backendNow() === 'codex' ? 'codexEffort' : 'claudeEffort', ui.effort.value));
 
@@ -306,6 +344,7 @@
     ui.search.value = '';
     renderCats();
     renderActions();
+    renderBibView();
     if (currentCat === 'check' && !lintDoc) lintTick(true);
   });
   ui.search.addEventListener('input', () => {
@@ -314,7 +353,10 @@
     renderActions();
   });
 
+  const hostHas = (cap) => !cliInfo || (cliInfo.caps || []).includes(cap);
   function actionDisabledReason(a) {
+    if (a.web && !hostHas('web-allowlist')) return '로컬 브리지를 업데이트해야 합니다 (./scripts/install-host.sh)';
+    if (a.kind === 'bib' && !hostHas('bib')) return '로컬 브리지를 업데이트해야 합니다 (./scripts/install-host.sh)';
     if (a.web && backendNow() === 'codex') return '웹 검색 기능은 Claude 백엔드에서만 사용할 수 있습니다';
     if (a.web && !settings.allowWeb) return '설정에서 "웹 검색 허용"을 켜야 합니다';
     return '';
@@ -341,18 +383,21 @@
       const reason = actionDisabledReason(a);
       b.title = reason || a.desc || a.instruction || '';
       if (reason) b.disabled = true;
-      if (a.web || a.kind === 'lint') {
+      if (a.web || a.kind === 'lint' || a.kind === 'bib') {
         const t = document.createElement('span');
         t.className = 'tag';
-        t.textContent = a.web ? '웹' : '즉시';
+        t.textContent = a.web ? '웹' : a.kind === 'bib' ? 'DB' : '즉시';
         b.appendChild(t);
       }
       ui.actions.appendChild(b);
     }
+    if (isBusy()) for (const b of ui.actions.querySelectorAll('.chip')) { const a = allActions().find((x) => x.id === b.dataset.id); if (!a || !['lint', 'terms', 'packages', 'bib'].includes(a.kind)) b.disabled = true; }
     ui.lintView.hidden = !(currentCat === 'check' && !q);
+    ui.bibView.hidden = !(currentCat === 'refs' && !q && bibState.mode);
     for (const b of ui.actions.querySelectorAll('.chip')) {
       const a = allActions().find((x) => x.id === b.dataset.id);
       if (a && ['lint', 'terms', 'packages'].includes(a.kind)) b.classList.toggle('on', !ui.lintView.hidden && a.kind === checkMode);
+      if (a && a.kind === 'bib') b.classList.toggle('on', !ui.bibView.hidden && a.mode === bibState.mode);
     }
     if (!ui.lintView.hidden) renderCheckView();
   }
@@ -371,6 +416,8 @@
   });
 
   function runAction(a, opts = {}) {
+    if (a.kind === 'bib') { openBib(a.mode); return; }
+    if (isBusy() && !['lint', 'terms', 'packages'].includes(a.kind)) { toast('실행 중입니다. 먼저 중지하거나 끝나기를 기다리세요.'); return; }
     if (a.kind === 'lint' || a.kind === 'terms' || a.kind === 'packages') {
       checkMode = a.kind;
       currentCat = 'check';
@@ -384,23 +431,31 @@
       return;
     }
     if (a.kind === 'fix') { runFix(a); return; }
-    start({ action: a, extra: ui.instr.value, autoApply: !!opts.autoApply });
+    start({ action: a, extra: opts.extra ?? ui.instr.value, autoApply: !!opts.autoApply });
   }
 
   // ------------------------------------------------------------ local lint ---
 
   let lintIssues = [];
   let lintDoc = null;
+  let lintVersion = -1;
+  let lintFile = '';
   let checkMode = 'lint';
   const lintFilter = { error: true, warn: true, info: false };
+  const isTexFile = (name) => !name || /\.(tex|ltx)$/i.test(name);
+  const lineText = (doc, n) => { if (!doc) return undefined; let i = 0; for (let k = 1; k < n; k++) { i = doc.indexOf('\n', i) + 1; if (!i) return undefined; } const e = doc.indexOf('\n', i); return doc.slice(i, e < 0 ? doc.length : e); };
 
   async function lintTick(force = false) {
     if (!force && (!settings.autoLint || document.visibilityState !== 'visible')) return;
     let r;
-    try { r = await mw('getDoc', {}, 3000); } catch { return; }
-    if (!force && r.doc === lintDoc) return;
+    try { r = await mw('getDoc', { knownVersion: force ? -1 : lintVersion }, 3000); } catch { return; }
+    if (r.unchanged) return;
+    lintVersion = r.version;
+    lintFile = r.fileName || '';
     lintDoc = r.doc;
-    try { lintIssues = [...L.lintLatex(r.doc), ...K.asIssues(K.analyze(r.doc))].sort((a, b) => a.line - b.line); } catch { lintIssues = []; }
+    try {
+      lintIssues = isTexFile(lintFile) ? [...L.lintLatex(r.doc), ...K.asIssues(K.analyze(r.doc))].sort((a, b) => a.line - b.line) : [];
+    } catch { lintIssues = []; }
     updateLintBadges();
     if (!ui.lintView.hidden && checkMode === 'lint') renderLint();
     if (!ui.lintView.hidden && checkMode === 'packages') renderPackagesView();
@@ -505,6 +560,7 @@
 
   // ---- 필요한 패키지 (missing packages)
 
+  const pkgUnchecked = new Set();
   function packageSelection(listEl) {
     return [...listEl.querySelectorAll('input[data-pkg]:checked')].map((cb) => ({ kind: cb.dataset.kind, name: cb.dataset.pkg }));
   }
@@ -519,8 +575,9 @@
         <span class="grow"></span>
         <button class="btn sm repkg" type="button">다시 분석</button>
       </div>
+      ${r.externalPreamble || r.venueStyle ? `<p class="hint">${r.externalPreamble ? '프리앰블 일부가 \\input 된 파일에 있어 확인할 수 없습니다. ' : ''}${r.venueStyle ? `학회 스타일(${esc(r.venueStyle)})이 이미 불러온 패키지는 체크를 해제하세요.` : ''}</p>` : ''}
       ${r.missing.length ? `<ul class="lint-list pkg-list">${r.missing.map((m) => `
-        <li class="pkg-item"><label><input type="checkbox" data-pkg="${esc(m.name)}" data-kind="${m.kind}" checked>
+        <li class="pkg-item"><label><input type="checkbox" data-pkg="${esc(m.name)}" data-kind="${m.kind}" ${pkgUnchecked.has(`${m.kind}:${m.name}`) ? '' : 'checked'}>
           <code>${m.kind === 'tikzlib' ? `\\usetikzlibrary{${esc(m.name)}}` : `\\usepackage{${esc(m.name)}}`}</code></label>
           <span class="hint">${esc(m.why)}</span>${m.line ? `<button class="jump" type="button" data-line="${m.line}">L${m.line}</button>` : ''}</li>`).join('')}</ul>
         <div class="row"><span class="hint">학회 템플릿(.sty/.cls)이 이미 불러온 패키지는 제외하세요</span><span class="grow"></span>
@@ -553,7 +610,7 @@
 
   ui.lintView.addEventListener('click', (e) => {
     const jump = e.target.closest('button.jump, li[data-line]');
-    if (jump) { mw('selectLines', { line: Number(jump.dataset.line) }).catch(() => {}); return; }
+    if (jump) { const n = Number(jump.dataset.line); mw('selectLines', { line: n, text: lineText(lintDoc, n) }).catch(() => {}); return; }
     if (e.target.closest('.relint')) lintTick(true);
     else if (e.target.closest('.reterms')) lintTick(true).then(() => { analyzeTermsNow(); renderTermsView(); });
     else if (e.target.closest('.repkg')) lintTick(true).then(renderPackagesView);
@@ -565,6 +622,8 @@
   ui.lintView.addEventListener('change', (e) => {
     const cb = e.target.closest('input[data-sev]');
     if (cb) { lintFilter[cb.dataset.sev] = cb.checked; renderLint(); return; }
+    const pk = e.target.closest('input[data-pkg]');
+    if (pk) { const key = `${pk.dataset.kind}:${pk.dataset.pkg}`; if (pk.checked) pkgUnchecked.delete(key); else pkgUnchecked.add(key); return; }
     const group = e.target.closest('.term-group');
     if (group) {
       const id = group.dataset.id;
@@ -602,8 +661,8 @@
     profile[f] = e.target.value;
     clearTimeout(profileTimer);
     profileTimer = setTimeout(() => {
+      if (!alive()) { showNotice('확장 프로그램이 업데이트되었습니다. 페이지를 새로고침하세요.'); return; }
       chrome.storage.local.set({ [PROFILE_KEY]: profile }).catch(() => {});
-      renderProfile();
     }, 400);
   });
 
@@ -655,10 +714,16 @@
       renderModelBar();
       const name = backendNow();
       const cli = resp[name];
+      const want = chrome.runtime.getManifest().version;
+      const caps = resp.caps || [];
       if (cli?.ok) {
         ui.dot.className = 'dot ok';
         ui.dot.title = `${cli.version} · ${cli.path}`;
-        showNotice(null);
+        if (resp.hostVersion !== want || !caps.includes('bib')) {
+          showNotice(`로컬 브리지(v${M.escapeHtml(String(resp.hostVersion || '?'))})가 확장(v${want})과 다릅니다. 터미널에서 <code>./scripts/install-host.sh</code> 를 다시 실행하세요. 그 전까지 웹·BibTeX 기능은 꺼집니다.`);
+        } else if (name === 'codex') {
+          showNotice('Codex 는 읽기 전용 샌드박스에서도 이 컴퓨터의 파일을 읽을 수 있습니다. 공유 프로젝트(다른 사람이 쓴 글)에는 Claude 백엔드를 권장합니다.');
+        } else showNotice(null);
       } else {
         ui.dot.className = 'dot bad';
         ui.dot.title = cli?.error || `${name} 없음`;
@@ -723,10 +788,13 @@
 
   // ------------------------------------------------------------------ runs ---
 
-  let current = null;
+  let current = null;   // run shown in the panel
+  let active = null;    // run currently streaming (at most one)
+  let starting = false; // a start() is preparing (blocks double triggers)
   let runSeq = 0;
   let tickTimer = 0;
   const history = [];
+  const isBusy = () => !!active || starting;
 
   const ERROR_TEXT = {
     EDITOR_NOT_FOUND: 'Overleaf 소스 편집기를 찾지 못했습니다. 편집기가 열려 있는지 확인하세요.',
@@ -742,6 +810,11 @@
     TIMEOUT: '시간 초과로 중단했습니다. 설정에서 제한 시간을 늘리거나 사고 수준을 낮추세요.',
     BUSY: '이전 요청이 아직 실행 중입니다.',
     EMPTY_PROMPT: '보낼 내용이 없습니다.',
+    READ_ONLY: '읽기 전용 문서라 적용할 수 없습니다 (보기 권한이거나 저장 오류로 잠김). "복사" 해서 사용하세요.',
+    WRONG_FILE: '이 결과는 다른 파일에서 만든 것입니다. 원래 파일을 연 뒤 적용하세요.',
+    WORKDIR_FAILED: '로컬 브리지의 작업 폴더를 만들 수 없습니다.',
+    HOST_EXCEPTION: '로컬 브리지에서 예외가 발생했습니다.',
+    BRIDGE_MISSING: '페이지 연결이 준비되지 않았습니다. 페이지를 새로고침하세요.',
   };
 
   function explain(code, detail = '') {
@@ -754,7 +827,7 @@
     return text;
   }
 
-  function setBusy(busy) {
+  function setBusy(busy = isBusy()) {
     ui.spinner.hidden = !busy;
     ui.stopBtn.hidden = !busy;
     ui.runBtn.disabled = busy;
@@ -769,7 +842,7 @@
   }
 
   function hideResultParts() {
-    for (const el of [ui.errDetail, ui.explain, ui.tabs, ui.diffBar, ui.diff, ui.out, ui.variants, ui.report, ui.resultActions, ui.pkgPrompt]) el.hidden = true;
+    for (const el of [ui.errDetail, ui.explain, ui.safety, ui.tabs, ui.diffBar, ui.diff, ui.out, ui.variants, ui.report, ui.resultActions, ui.pkgPrompt]) el.hidden = true;
   }
 
   function scrollToResult() {
@@ -777,11 +850,17 @@
   }
 
   async function start(spec) {
-    if (current && !current.finished) cancel({ silent: true });
+    if (starting) return undefined;
+    if (active) cancel({ silent: true });
+    starting = true;
+    try { return await startRun(spec); } finally { starting = false; if (!active) setBusy(false); }
+  }
+
+  async function startRun(spec) {
     current = null;
     openPanel();
     hideHistory();
-    if (!chrome.runtime?.id) return showError('EXTENSION_RELOADED');
+    if (!alive()) return showError('EXTENSION_RELOADED');
     const { action } = spec;
     const reason = actionDisabledReason(action);
     if (reason) return showError(null, reason);
@@ -805,10 +884,14 @@
 
     const run = {
       id: ++runSeq, spec, action, target, request, output: request.output, doc: ctx.doc,
+      fileName: ctx.fileName || '',
+      ctxBefore: ctx.doc.slice(Math.max(0, target.from - 160), target.from),
+      ctxAfter: ctx.doc.slice(target.to, target.to + 160),
       raw: '', finalText: null, finished: false, applied: false, started: Date.now(),
       statusBase: `${backendLabel(request)} 생성 중`, port: null, label: action.label,
     };
     current = run;
+    active = run;
 
     ui.result.hidden = false;
     ui.status.classList.remove('err');
@@ -838,7 +921,10 @@
     port.onDisconnect.addListener(() => {
       if (!run.finished) fail(run, 'BACKGROUND_DISCONNECTED', chrome.runtime.lastError?.message);
     });
-    port.postMessage({ type: 'run', request });
+    // Send only the fields the bridge understands.
+    const { backend, model, effort, web, timeoutSec, system, prompt } = request;
+    port.postMessage({ type: 'run', request: { backend, model, effort, web, timeoutSec, system, prompt } });
+    return undefined;
   }
 
   let renderTimer = 0;
@@ -848,16 +934,22 @@
       case 'status':
         run.statusBase = m.text;
         break;
+      case 'reset': // a new assistant message started (e.g. after a web search): drop the preamble chatter
+        run.raw = '';
+        break;
       case 'delta':
         run.raw += m.text;
-        if (current !== run) break;
-        if (run.output === 'report') {
-          if (!renderTimer) renderTimer = setTimeout(() => { renderTimer = 0; if (current === run && !run.finished) ui.report.innerHTML = M.renderMarkdown(run.raw); }, 150);
-        } else {
-          const atBottom = ui.out.scrollTop + ui.out.clientHeight >= ui.out.scrollHeight - 8;
-          ui.out.value = run.raw;
-          if (atBottom) ui.out.scrollTop = ui.out.scrollHeight;
-        }
+        if (current !== run || renderTimer) break;
+        renderTimer = setTimeout(() => {
+          renderTimer = 0;
+          if (current !== run || run.finished) return;
+          if (run.output === 'report') ui.report.innerHTML = M.renderMarkdown(run.raw);
+          else {
+            const atBottom = ui.out.scrollTop + ui.out.clientHeight >= ui.out.scrollHeight - 8;
+            ui.out.value = run.raw;
+            if (atBottom) ui.out.scrollTop = ui.out.scrollHeight;
+          }
+        }, 120);
         break;
       case 'final-chunk':
         run.finalText = (run.finalText || '') + m.text;
@@ -876,10 +968,9 @@
   function endRun(run) {
     run.finished = true;
     try { run.port?.disconnect(); } catch { /* ignore */ }
-    if (current === run) {
-      clearInterval(tickTimer);
-      setBusy(false);
-    }
+    if (active === run) active = null;
+    if (current === run) clearInterval(tickTimer);
+    setBusy(isBusy());
   }
 
   function finish(run, meta) {
@@ -894,12 +985,17 @@
       run.explanation = f.explanation;
       run.result = f.latex;
     } else run.result = P.postProcess(final, run.target);
+    if ((run.output === 'latex' || run.output === 'fix') && run.result != null) {
+      const original = run.target.mode === 'replace' ? (run.target.promptText ?? run.target.text) : '';
+      run.safety = P.safetyCheck(original, run.result, run.doc);
+    }
     history.unshift(run);
     history.length = Math.min(history.length, HISTORY_MAX);
+    for (const old of history.slice(3)) old.doc = null; // keep full documents only for recent runs
     if (current !== run) return;
     renderResult(run);
     const changed = run.result != null && run.result.trim() && run.result !== run.target.text;
-    if (run.spec.autoApply && run.output === 'latex' && changed) apply('replace');
+    if (run.spec.autoApply && run.output === 'latex' && changed && !(run.safety || []).some((w) => w.level === 'warn')) apply('replace');
   }
 
   function renderResult(run) {
@@ -932,6 +1028,9 @@
         ui.explain.hidden = !run.explanation;
         ui.explain.textContent = run.explanation || '';
       }
+      const warns = run.safety || [];
+      ui.safety.hidden = !warns.length;
+      ui.safety.innerHTML = warns.length ? `<b>적용 전 확인</b><ul>${warns.map((w) => `<li class="${w.level}">${M.escapeHtml(w.message)}</li>`).join('')}</ul>` : '';
       if (run.result == null) {
         ui.statusText.textContent = `수정안 없음 · ${head}`;
       } else {
@@ -957,8 +1056,9 @@
     ui.pkgPrompt.hidden = true;
     ui.copyBtn.hidden = !btns.copy;
     ui.retryBtn.hidden = !btns.retry;
-    ui.applyBtn.disabled = false;
-    ui.afterBtn.disabled = false;
+    ui.applyBtn.disabled = !!run.applied;
+    ui.afterBtn.disabled = !!run.applied;
+    setBusy(isBusy());
   }
 
   function renderVariants(run) {
@@ -989,23 +1089,35 @@
     }
   });
 
+  function partialActions(run) {
+    // After a failure/cancel: keep what was streamed (copyable), allow retry, hide result-specific buttons.
+    ui.resultActions.hidden = false;
+    for (const b of [ui.applyBtn, ui.afterBtn, ui.commentBtn, ui.bibBtn, ui.glossaryBtn]) b.hidden = true;
+    ui.copyBtn.hidden = !run.raw;
+    ui.retryBtn.hidden = false;
+    if (run.raw && run.output !== 'report') { ui.out.hidden = false; ui.out.readOnly = false; ui.out.value = run.raw; }
+  }
+
   function fail(run, code, detail) {
     if (run.finished) return;
     endRun(run);
     if (current !== run) return;
     showError(code, null, detail);
-    if (run.raw && run.output !== 'report') {
-      ui.out.hidden = false;
-      ui.out.readOnly = false;
-      ui.resultActions.hidden = false;
-      for (const b of [ui.applyBtn, ui.afterBtn, ui.commentBtn, ui.bibBtn, ui.retryBtn]) b.hidden = true;
-    }
+    partialActions(run);
+  }
+
+  // Errors while applying keep the result, diff and buttons (so "복사" still works).
+  function showApplyError(code, detail) {
+    ui.status.classList.add('err');
+    ui.statusText.textContent = explain(code, detail);
+    ui.errDetail.hidden = !detail;
+    ui.errDetail.textContent = detail ? String(detail).slice(-2000) : '';
   }
 
   function showError(code, text, detail) {
     ui.result.hidden = false;
-    setBusy(false);
     clearInterval(tickTimer);
+    setBusy(isBusy());
     if (!current || current.finished) hideResultParts();
     ui.status.classList.add('err');
     ui.statusText.textContent = text || explain(code, detail);
@@ -1015,17 +1127,13 @@
   }
 
   function cancel({ silent = false } = {}) {
-    const run = current;
+    const run = active;
     if (!run || run.finished) return;
     try { run.port?.postMessage({ type: 'cancel' }); } catch { /* ignore */ }
     endRun(run);
-    if (!silent) {
+    if (!silent && current === run) {
       ui.statusText.textContent = '중지됨';
-      if (run.raw && run.output !== 'report') {
-        ui.out.readOnly = false;
-        ui.resultActions.hidden = false;
-        for (const b of [ui.applyBtn, ui.afterBtn, ui.commentBtn, ui.bibBtn]) b.hidden = true;
-      }
+      partialActions(run);
     }
   }
 
@@ -1084,30 +1192,47 @@
 
   // ------------------------------------------------------------- applying ---
 
-  async function applyText(run, text, position) {
+  // How new text is placed at the cursor: environments start on their own line, paragraphs after a blank line.
+  const insertModeFor = (run) => (run.action.kind === 'make' ? 'block' : run.action.kind === 'compose' ? 'paragraph' : 'inline');
+
+  async function applyText(run, rawText, position) {
     const target = run.target;
+    const san = P.sanitizeForOverleaf(rawText);
+    const text = san.text;
+    let doc = run.doc;
+    if (doc == null) {
+      try { doc = (await mw('getContext')).doc; } catch (e) { showApplyError(e.message); return false; }
+    }
+    const around = (pos) => ({ ctxBefore: doc.slice(Math.max(0, pos - 160), pos), ctxAfter: doc.slice(pos, pos + 160) });
+    const fileName = run.fileName || '';
     let args;
-    if (target.mode === 'insert') {
-      const t = P.insertionText(text.replace(/\s+$/, ''), run.doc, target.from);
-      args = { from: target.from, to: target.from, expected: '', text: t, anchorBefore: run.doc.slice(Math.max(0, target.from - 80), target.from) };
+    const repl = target.replaceRange; // "다시 생성" after an apply: replace what was inserted last time
+    if (repl) {
+      const newText = target.mode === 'insert' ? P.insertionPlan(text.replace(/\s+$/, ''), doc, target.from, insertModeFor(run)).text : text;
+      args = { from: repl.from, to: repl.to, expected: repl.text, text: newText, ctxBefore: repl.ctxBefore, ctxAfter: repl.ctxAfter, fileName };
+    } else if (target.mode === 'insert') {
+      const plan = P.insertionPlan(text.replace(/\s+$/, ''), doc, target.from, insertModeFor(run));
+      args = { from: plan.pos, to: plan.pos, expected: '', text: plan.text, ...around(plan.pos), fileName };
     } else if (position === 'after') {
-      const sep = target.text.endsWith('\n') ? '\n' : '\n\n';
-      args = { from: target.from, to: target.to, expected: target.text, text: `${sep}${text.trim()}`, position: 'after' };
+      const plan = P.afterPlan(doc, target.to, text, target.text);
+      args = { from: plan.pos, to: plan.pos, expected: '', text: plan.text, ...around(plan.pos), fileName };
     } else {
-      args = { from: target.from, to: target.to, expected: target.text, text };
+      args = { from: target.from, to: target.to, expected: target.text, text, ctxBefore: run.ctxBefore, ctxAfter: run.ctxAfter, fileName };
     }
     try {
-      await mw('apply', args);
+      const res = await mw('apply', args);
       run.applied = true;
+      run.appliedRange = { from: res.from, to: res.to, text: args.text, ctxBefore: args.ctxBefore, ctxAfter: args.ctxAfter };
       ui.status.classList.remove('err');
+      ui.errDetail.hidden = true;
       ui.statusText.textContent = `적용했습니다 · ${MOD}+Z 로 되돌릴 수 있습니다`;
-      toast('Overleaf 문서에 적용했습니다');
+      toast(san.removed ? `적용했습니다 (Overleaf 가 지원하지 않는 문자 ${san.removed}개 제거)` : 'Overleaf 문서에 적용했습니다');
       setTimeout(refreshTarget, 50);
       setTimeout(() => lintTick(true), 300);
       checkPackagesFor(args.text);
       return true;
     } catch (e) {
-      showError(e.message);
+      showApplyError(e.message);
       return false;
     }
   }
@@ -1186,10 +1311,18 @@
   ui.commentBtn.addEventListener('click', (e) => { if (e.isTrusted && current?.report) insertComment(current); });
   ui.bibBtn.addEventListener('click', () => { if (current?.report) copyText(M.codeBlocks(current.report, 'bibtex').join('\n\n')); });
   ui.stopBtn.addEventListener('click', () => cancel());
+  // "다시 생성" regenerates for the ORIGINAL target; after an apply it replaces the applied text.
   ui.retryBtn.addEventListener('click', (e) => {
-    if (!e.isTrusted || !current) return;
-    if (current.action.kind === 'fix') runFix(current.action);
-    else start({ ...current.spec, autoApply: false, ctx: null, target: null });
+    const r = current;
+    if (!e.isTrusted || !r) return;
+    if (r.action.kind === 'fix') { runFix(r.action); return; }
+    const ctx = r.doc != null ? { doc: r.doc, fileName: r.fileName } : null;
+    let target = ctx ? r.target : null;
+    if (r.applied && r.appliedRange) {
+      target = { ...r.target, replaceRange: r.appliedRange };
+      if (target.mode === 'replace') target.promptText = r.target.promptText ?? r.target.text;
+    }
+    start({ ...r.spec, autoApply: false, ctx: target ? (ctx || { doc: '', fileName: r.fileName }) : null, target });
   });
   ui.copyBtn.addEventListener('click', () => {
     const run = current;
@@ -1202,7 +1335,8 @@
     const a = e.target.closest('a.lref');
     if (!a) return;
     e.preventDefault();
-    mw('selectLines', { line: Number(a.dataset.line), end: Number(a.dataset.end || a.dataset.line) }).catch(() => {});
+    const n = Number(a.dataset.line);
+    mw('selectLines', { line: n, end: Number(a.dataset.end || n), text: lineText(current && current.doc, n) }).catch(() => {});
   });
 
   // -------------------------------------------------------------- history ---
@@ -1224,7 +1358,10 @@
       const when = new Date(run.started).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const preview = (run.report || run.result || (run.variants || [])[0] || '').replace(/\s+/g, ' ').slice(0, 90);
       b.innerHTML = `<span>${M.escapeHtml(run.label)}${run.applied ? ' ✓' : ''}</span><span class="hint">${when}</span><small>${M.escapeHtml(backendLabel(run.request))} — ${M.escapeHtml(preview)}</small>`;
-      b.addEventListener('click', () => { current = run; hideHistory(); renderResult(run); scrollToResult(); });
+      b.addEventListener('click', () => {
+        if (active) { toast('실행 중에는 기록을 열 수 없습니다. 먼저 중지하거나 끝나기를 기다리세요.'); return; }
+        current = run; hideHistory(); renderResult(run); scrollToResult();
+      });
       ui.history.appendChild(b);
     }
   }
@@ -1241,14 +1378,18 @@
   function readCompileLog() {
     const entries = [...document.querySelectorAll('.log-entry')];
     const list = entries.length ? entries : [...document.querySelectorAll('[class*="log-entry"]')].filter((el) => !el.parentElement?.closest('[class*="log-entry"]'));
-    const texts = list.map((el) => (el.innerText || '').trim()).filter(Boolean);
+    const texts = list.map((el) => (el.textContent || '').replace(/[ \t]+/g, ' ').trim()).filter(Boolean); // textContent: collapsed entries too
     texts.sort((a, b) => Number(/error/i.test(b)) - Number(/error/i.test(a)));
     return texts.slice(0, 10).join('\n---\n').slice(0, 8000);
   }
 
   async function runFix(action) {
     const pasted = ui.instr.value.trim();
-    const log = readCompileLog() || pasted;
+    // 1) the real output.log of the last compile (captured from Overleaf's compile response),
+    // 2) the log pane, 3) text pasted into the instruction box.
+    let log = '';
+    try { const r = await mw('compileLog', {}, 15000); if (r && r.text) log = P.extractLogErrors(r.text); } catch { /* ignore */ }
+    if (!log) log = readCompileLog() || pasted;
     if (!log) {
       openPanel();
       return showError(null, 'Overleaf 의 로그 패널을 열어 오류가 보이게 하거나, 오류 메시지를 입력칸에 붙여넣은 뒤 다시 실행하세요.');
@@ -1259,6 +1400,428 @@
     if (target.error) { openPanel(); return showError(null, target.error); }
     start({ action, ctx, target, logText: log, extra: '' });
   }
+
+  // ---------------------------------------------------------- BibTeX 관리 ---
+  // Metadata comes from arXiv / Semantic Scholar / OpenAlex / DOI (Crossref) via the bridge — no AI.
+
+  const bibState = { mode: null, loading: false, project: null, results: [], upgrade: null, missing: null, note: '' };
+  const esc = (s) => M.escapeHtml(String(s == null ? '' : s));
+
+  function bibLookup(op, params = {}) {
+    return chrome.runtime.sendMessage({ type: 'bib', query: { op, ...params } }).then((r) => {
+      if (!r || !r.ok) throw new Error((r && r.error) || 'lookup failed');
+      return r.data;
+    });
+  }
+  const safeLookup = (op, params) => bibLookup(op, params).catch(() => null);
+
+  async function fetchProjectDoc(id) {
+    const res = await fetch(`/Project/${encodeURIComponent(PROJECT_ID)}/doc/${encodeURIComponent(id)}/download`, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.text();
+  }
+
+  // Current file + other .tex/.bib files readable from the project (file tree doc ids).
+  async function loadBibProject() {
+    const ctx = await mw('getContext');
+    const curName = ctx.fileName || '';
+    const isBibFile = /\.bib$/i.test(curName);
+    const tex = [];
+    const bibs = [];
+    (isBibFile ? bibs : tex).push({ name: curName || '(현재 파일)', text: ctx.doc, open: true });
+    let docs = [];
+    try { docs = await mw('listDocs'); } catch { docs = []; }
+    for (const d of docs.slice(0, 60)) {
+      if (!d.id || d.type !== 'doc' || d.name === curName) continue;
+      const kind = /\.bib$/i.test(d.name) ? bibs : /\.tex$/i.test(d.name) ? tex : null;
+      if (!kind) continue;
+      try { kind.push({ name: d.name, text: await fetchProjectDoc(d.id), id: d.id, open: false }); } catch { /* unreadable: skip */ }
+    }
+    const entries = [];
+    for (const f of bibs) for (const e of B.parseBib(f.text).entries) entries.push({ ...e, file: f.name, open: f.open });
+    const cited = new Map();
+    for (const f of tex) for (const [k, v] of B.citedKeys(f.text)) if (!cited.has(k)) cited.set(k, { ...v, file: f.name, text: f.text });
+    return { ctx, curName, isBibFile, tex, bibs, entries, keys: new Set(entries.map((e) => e.key)), cited };
+  }
+
+  async function openBib(mode) {
+    currentCat = 'refs';
+    searchQuery = '';
+    ui.search.value = '';
+    bibState.mode = mode;
+    bibState.note = '';
+    renderCats();
+    renderActions();
+    bibState.loading = true;
+    renderBibView();
+    try { bibState.project = await loadBibProject(); } catch (e) { bibState.project = null; bibState.note = explain(e.message); }
+    bibState.loading = false;
+    if (mode === 'missing' && bibState.project) bibState.missing = null;
+    if (mode === 'upgrade' && bibState.project) bibState.upgrade = null;
+    renderBibView();
+  }
+
+  function bibSummary(pj) {
+    if (!pj) return '';
+    const bibNames = pj.bibs.map((f) => f.name).join(', ') || '없음';
+    return `.bib: ${esc(bibNames)} · 항목 ${pj.entries.length}개 · 원고에서 인용한 키 ${pj.cited.size}개 (${pj.tex.length}개 파일)`;
+  }
+
+  function renderBibView() {
+    const v = ui.bibView;
+    if (!bibState.mode || currentCat !== 'refs') { v.hidden = true; return; }
+    v.hidden = false;
+    const pj = bibState.project;
+    const head = `<div class="lint-head"><span>${bibState.loading ? '프로젝트 파일 읽는 중…' : bibSummary(pj)}</span><span class="grow"></span><button class="btn sm bib-reload" type="button">다시 읽기</button></div>${bibState.note ? `<p class="hint">${esc(bibState.note)}</p>` : ''}`;
+    if (bibState.loading || !pj) { v.innerHTML = head; return; }
+    const noBib = !pj.bibs.length ? '<p class="hint">프로젝트에서 .bib 파일을 찾지 못했습니다. .bib 파일을 열거나(파일 트리) 새로 만든 뒤 다시 읽으세요. 추가할 항목은 복사할 수 있습니다.</p>' : '';
+    if (bibState.mode === 'add') {
+      v.innerHTML = `${head}${noBib}
+        <div class="row"><input class="search bib-input" placeholder="DOI, arXiv ID·URL, 또는 논문 제목" value="${esc(bibState.lastQuery || '')}"><button class="btn primary bib-search" type="button">찾기</button></div>
+        ${pj.isBibFile ? '' : '<label class="hint bib-opt"><input type="checkbox" class="bib-cite" checked> 커서 위치에 \\cite{키} 넣기</label>'}
+        <div class="bib-results">${renderBibCards(bibState.results, 'add')}</div>`;
+    } else if (bibState.mode === 'missing') {
+      const missing = [...pj.cited.keys()].filter((k) => !pj.keys.has(k));
+      const st = bibState.missing;
+      v.innerHTML = `${head}${noBib}
+        ${missing.length ? `<div class="row"><span class="hint">.bib 에 없는 인용 키 ${missing.length}개</span><span class="grow"></span><button class="btn primary bib-find-missing" type="button" ${st && st.running ? 'disabled' : ''}>${st ? '다시 찾기' : '후보 찾기'}</button></div>` : '<p class="hint">모든 \\cite 키가 .bib 에 있습니다 ✓</p>'}
+        <div class="bib-results">${missing.map((k) => {
+          const r = st && st.byKey[k];
+          const ctxText = B.citeContext(pj.cited.get(k).text, pj.cited.get(k).index, 90);
+          return `<div class="bib-card"><div class="bib-key"><code>${esc(k)}</code> <span class="hint">${esc(pj.cited.get(k).file)} · …${esc(ctxText)}…</span></div>
+            ${r ? (r.candidates.length ? renderBibCards(r.candidates, 'missing', k) : `<p class="hint">${r.failed ? '조회 서비스에 연결하지 못했습니다. 잠시 후 다시 찾으세요.' : '후보를 찾지 못했습니다. "BibTeX 추가"에서 제목으로 찾아보세요.'}</p>`) : st && st.running ? '<p class="hint">찾는 중…</p>' : ''}</div>`;
+        }).join('')}</div>`;
+    } else if (bibState.mode === 'upgrade') {
+      const pre = pj.entries.filter((e) => B.isPreprint(e));
+      const st = bibState.upgrade;
+      const rows = st ? st.rows : [];
+      const selected = rows.filter((r) => r.selected && r.newText);
+      v.innerHTML = `${head}${noBib}
+        ${st && !st.running && st.s2Failed ? '<p class="hint">⚠ Semantic Scholar 가 요청 한도로 응답하지 않아 학회 논문(DOI 없는 NeurIPS·ICLR 등)은 확인하지 못했을 수 있습니다. 1~2분 뒤 "다시 확인"하거나, 브리지 config.json 에 "s2ApiKey" 를 넣으세요.</p>' : ''}
+        ${pre.length ? `<div class="row"><span class="hint">arXiv·프리프린트 항목 ${pre.length}개${st && st.running ? ` · 확인 중 ${st.done}/${pre.length}` : ''}</span><span class="grow"></span><button class="btn bib-check-pub" type="button" ${st && st.running ? 'disabled' : ''}>${st ? '다시 확인' : '출판 여부 확인'}</button></div>` : '<p class="hint">arXiv·프리프린트로 인용한 항목이 없습니다 ✓</p>'}
+        <div class="bib-results">${rows.map((r, i) => `<div class="bib-card">
+          <label class="bib-key"><input type="checkbox" data-up="${i}" ${r.selected ? 'checked' : ''} ${r.newText ? '' : 'disabled'}> <code>${esc(r.entry.key)}</code>
+            <span class="hint">${r.pub ? `→ ${esc(r.pub.venue || 'DOI')} ${esc(r.pub.year || '')} · ${esc(r.pub.source)} · 확신 ${r.pub.confidence === 'high' ? '높음' : '보통'}` : r.error ? `확인 실패: ${esc(r.error)}` : r.checked ? (st.s2Failed ? '출판본을 찾지 못함 — Semantic Scholar 요청 한도로 일부만 확인했습니다. 잠시 후 다시 확인하세요' : '출판본을 찾지 못함 (아직 프리프린트일 수 있음)') : '확인 중…'}</span></label>
+          ${r.newText ? `<details><summary class="hint">변경 내용</summary><div class="diff">${D.renderDiffHtml(D.diffWords(r.oldText, r.newText))}</div></details>` : ''}
+        </div>`).join('')}</div>
+        ${rows.some((r) => r.newText) ? `<div class="row"><span class="hint">같은 키로 교체 · ${MOD}+Z 로 되돌리기</span><span class="grow"></span><button class="btn sm bib-copy-up" type="button">복사</button><button class="btn primary bib-apply-up" type="button" ${selected.length ? '' : 'disabled'}>선택 항목 정정 (${selected.length})</button></div>` : ''}`;
+    } else if (bibState.mode === 'audit') {
+      const issues = B.auditBib(pj.entries, pj.tex.length ? new Set(pj.cited.keys()) : null);
+      const label = { duplicate: '중복', 'dup-key': '키 중복', 'missing-field': '필드 누락', unprotected: '대문자 보호', preprint: '프리프린트', unused: '미사용' };
+      const fixable = issues.filter((i) => i.kind === 'unprotected');
+      v.innerHTML = `${head}${noBib}
+        ${issues.length ? `<ul class="lint-list">${issues.map((i, n) => `<li data-audit="${n}"><span class="sev ${i.kind === 'duplicate' || i.kind === 'dup-key' || i.kind === 'missing-field' ? 'warn' : 'info'}"></span><span class="ln">${esc(label[i.kind] || i.kind)}</span><span><code>${esc(i.key)}</code> ${esc(i.message)}<span class="ex">${esc(i.entry.file)}</span></span></li>`).join('')}</ul>` : '<p class="hint">문제가 없습니다 ✓</p>'}
+        ${fixable.length ? `<div class="row"><span class="grow"></span><button class="btn primary bib-protect" type="button">제목 대문자 보호 적용 (${fixable.length})</button></div>` : ''}`;
+      bibState.auditIssues = issues;
+    }
+  }
+
+  function renderBibCards(list, mode, key) {
+    return (list || []).map((c, i) => `<div class="bib-cand">
+      <div><b>${esc(c.title)}</b></div>
+      <div class="hint">${esc((c.authors || []).slice(0, 4).join(', '))}${(c.authors || []).length > 4 ? ' 외' : ''} · ${esc(c.venue || (c.kind === 'preprint' ? `arXiv:${c.arxivId}` : ''))} ${esc(c.year || '')} · <span class="tag">${esc(c.source)}</span>${c.citedBy ? ` · 피인용 ${c.citedBy >= 1000 ? `${Math.round(c.citedBy / 100) / 10}k` : c.citedBy}` : ''}${c.score != null ? ` · 일치도 ${c.score}` : ''}</div>
+      <div class="row"><span class="grow"></span><button class="btn sm bib-copy-one" type="button" data-mode="${mode}" data-key="${esc(key || '')}" data-i="${i}">BibTeX 복사</button><button class="btn sm primary bib-add-one" type="button" data-mode="${mode}" data-key="${esc(key || '')}" data-i="${i}">추가</button></div>
+    </div>`).join('');
+  }
+
+  // ---- candidates
+
+  const authorsOf = (list) => (list || []).map((a) => (typeof a === 'string' ? a : a && (a.name || a.display_name))).filter(Boolean);
+
+  async function candidatesForArxiv(id) {
+    const [axList, s2List, oaWork] = await Promise.all([safeLookup('arxiv', { ids: [id] }), safeLookup('s2', { ids: [`arXiv:${id}`] }), safeLookup('openalex-work', { id: `doi:10.48550/arxiv.${id}` })]);
+    const ax = (axList || [])[0];
+    const out = [];
+    if (ax) {
+      const pub = B.choosePublication({ title: ax.title, authors: ax.authors.join(' and '), arxiv: ax, s2: (s2List || [])[0], openalex: oaWork ? [oaWork] : [], crossref: [] });
+      if (pub) out.push({ ...pub, authors: ax.authors, source: `${pub.source} (출판본)` });
+      out.push({ kind: 'preprint', title: ax.title, authors: ax.authors, year: Number(ax.published.slice(0, 4)), arxivId: ax.id, primary: ax.primary, source: 'arXiv' });
+    }
+    return out;
+  }
+
+  async function candidatesForTitle(q) {
+    const [oa, cr, ax] = await Promise.all([safeLookup('openalex-search', { q, max: 8 }), safeLookup('crossref-search', { q, max: 6 }), safeLookup('arxiv-search', { q, max: 4 })]);
+    const list = [];
+    for (const w of oa || []) {
+      if (!w) continue;
+      const loc = (w.locations || []).find((l) => !l.isArxiv && l.source) || w.primary;
+      list.push({ kind: /preprint|posted/.test(w.type) ? 'preprint' : /conference|proceedings/i.test(`${w.type} ${loc && loc.sourceType}`) ? 'conference' : 'journal', title: w.title, authors: w.authors, year: w.year, venue: loc && loc.source, doi: B.isArxivDoi(w.doi) ? '' : w.doi, arxivId: B.isArxivDoi(w.doi) ? w.doi.replace(/^10\.48550\/arxiv\./i, '') : '', source: 'OpenAlex' });
+    }
+    for (const c of cr || []) if (c && c.doi && !B.isArxivDoi(c.doi)) list.push({ kind: /proceedings/.test(c.type) ? 'conference' : 'journal', title: c.title, authors: c.authors, year: c.year, venue: c.venue, doi: c.doi, source: 'Crossref' });
+    for (const a of ax || []) list.push({ kind: 'preprint', title: a.title, authors: a.authors, year: Number(String(a.published).slice(0, 4)), arxivId: a.id, primary: a.primary, source: 'arXiv' });
+    // de-duplicate (same DOI or same title+kind), rank by title similarity, published first
+    const seen = new Set();
+    return list.filter((c) => c.title).map((c) => ({ ...c, sim: B.titleSim(c.title, q) }))
+      .sort((a, b) => b.sim - a.sim || (a.kind === 'preprint') - (b.kind === 'preprint'))
+      .filter((c) => { const k = c.doi ? c.doi.toLowerCase() : `${B.normTitle(c.title)}|${c.kind}`; if (seen.has(k)) return false; seen.add(k); return true; })
+      .slice(0, 6);
+  }
+
+  async function bibSearch() {
+    const input = ui.bibView.querySelector('.bib-input');
+    const q = B.parseLookupInput(input && input.value);
+    if (!q) return;
+    bibState.lastQuery = input.value;
+    bibState.results = [];
+    bibState.note = '찾는 중…';
+    renderBibView();
+    try {
+      if (q.kind === 'doi') {
+        const text = await bibLookup('doi-bib', { doi: q.value });
+        const e = B.parseBib(text).entries[0];
+        bibState.results = e ? [{ kind: 'doi', title: B.plain(e.fields.title), authors: B.plain(e.fields.author || '').split(/\s+and\s+/), year: e.fields.year, venue: B.plain(e.fields.journal || e.fields.booktitle || ''), doi: q.value, bibtex: text, source: 'DOI' }] : [];
+      } else if (q.kind === 'arxiv') bibState.results = await candidatesForArxiv(q.value);
+      else bibState.results = await candidatesForTitle(q.value);
+      bibState.note = bibState.results.length ? '' : '찾지 못했습니다. 제목을 더 정확히 쓰거나 DOI·arXiv ID 로 찾아보세요.';
+    } catch (e) {
+      bibState.note = `조회 실패: ${e.message}`;
+    }
+    renderBibView();
+  }
+
+  async function findMissing() {
+    const pj = bibState.project;
+    const missing = [...pj.cited.keys()].filter((k) => !pj.keys.has(k)).slice(0, 40);
+    bibState.missing = { running: true, byKey: {} };
+    renderBibView();
+    for (const k of missing) {
+      const hint = B.keyHint(k);
+      const c = pj.cited.get(k);
+      const near = B.citeQueryWords(c.text, c.index);
+      const ctxWords = [...near.before, ...near.after];
+      const topic = [...new Set([...hint.words, ...near.before.slice(-4)])].join(' ');
+      const [cr, oa, cr2] = await Promise.all([
+        safeLookup('crossref-search', { q: [hint.author, topic, hint.year].filter(Boolean).join(' '), max: 8 }),
+        safeLookup('openalex-search', { q: topic || [hint.author, hint.year].join(' '), max: 10 }),
+        safeLookup('crossref-search', { q: [hint.author, ...hint.words, hint.year].filter(Boolean).join(' '), max: 5 }),
+      ]);
+      if (cr2) (cr || []).push(...cr2);
+      const pool = [];
+      for (const x of cr || []) if (x) pool.push({ kind: /proceedings/.test(x.type) ? 'conference' : 'journal', title: x.title, authors: x.authors, year: x.year, venue: x.venue, doi: B.isArxivDoi(x.doi) ? '' : x.doi, citedBy: x.citedBy || 0, source: 'Crossref' });
+      for (const w of oa || []) if (w) { const loc = (w.locations || []).find((l) => !l.isArxiv && l.source) || w.primary; pool.push({ kind: /preprint/.test(w.type) ? 'preprint' : /conference|proceedings/i.test(w.type) ? 'conference' : 'journal', title: w.title, authors: w.authors, year: w.year, venue: loc && loc.source, doi: B.isArxivDoi(w.doi) ? '' : w.doi, arxivId: B.isArxivDoi(w.doi) ? w.doi.replace(/^10\.48550\/arxiv\./i, '') : '', citedBy: w.citedBy || 0, source: 'OpenAlex' }); }
+      const scored = pool.filter((p) => p.title).map((p) => {
+        const lasts = (p.authors || []).map((a) => B.plain(a).trim().split(/\s+/).pop().toLowerCase());
+        const tWords = new Set(B.normTitle(p.title).split(' '));
+        let score = 0;
+        if (hint.author && lasts.includes(hint.author)) score += 3;
+        if (hint.year && Math.abs(Number(p.year) - Number(hint.year)) <= 1) score += String(p.year) === hint.year ? 2 : 1;
+        for (const w of hint.words) if (tWords.has(w)) score += 1;
+        score += Math.min(2, ctxWords.filter((w) => tWords.has(w) || tWords.has(w.replace(/s$/, ''))).length * 0.6);
+        // When the key/context fit several papers, the much more cited one is usually the intended citation.
+        score += Math.min(4, Math.log10((p.citedBy || 0) + 1) * 0.8);
+        return { ...p, score: Math.round(score * 10) / 10 };
+      }).sort((a, b) => b.score - a.score);
+      const maxCites = new Map();
+      for (const p of scored) { const id = p.doi ? p.doi.toLowerCase() : B.normTitle(p.title); maxCites.set(id, Math.max(maxCites.get(id) || 0, p.citedBy || 0)); }
+      for (const p of scored) p.citedBy = maxCites.get(p.doi ? p.doi.toLowerCase() : B.normTitle(p.title));
+      const seen = new Set();
+      bibState.missing.byKey[k] = { candidates: scored.filter((p) => { const id = p.doi || B.normTitle(p.title); if (seen.has(id)) return false; seen.add(id); return p.score >= 3; }).slice(0, 3), failed: !cr && !oa };
+      renderBibView();
+    }
+    bibState.missing.running = false;
+    renderBibView();
+  }
+
+  async function checkPublications() {
+    const pj = bibState.project;
+    const pre = pj.entries.filter((e) => B.isPreprint(e));
+    const rows = pre.map((e) => ({ entry: e, oldText: B.serializeEntry(e), checked: false }));
+    bibState.upgrade = { running: true, done: 0, rows };
+    renderBibView();
+    const ids = pre.map((e) => B.arxivIdOf(e));
+    const valid = ids.filter(Boolean);
+    const [axList, s2List] = await Promise.all([valid.length ? safeLookup('arxiv', { ids: valid }) : [], valid.length ? safeLookup('s2', { ids: valid.map((i) => `arXiv:${i}`) }) : []]);
+    bibState.upgrade.s2Failed = valid.length > 0 && s2List == null;
+    bibState.upgrade.arxivFailed = valid.length > 0 && axList == null;
+    const axMap = new Map((axList || []).map((a) => [a.id, a]));
+    const s2Map = new Map(valid.map((id, i) => [id, (s2List || [])[i] || null]));
+    let next = 0;
+    const worker = async () => {
+      while (next < rows.length) {
+        const r = rows[next++];
+        const e = r.entry;
+        const id = B.arxivIdOf(e);
+        try {
+          const title = B.plain(e.fields.title || (axMap.get(id) || {}).title || '');
+          const input = { title, authors: e.fields.author || '', year: e.fields.year, arxiv: axMap.get(id), s2: s2Map.get(id), openalex: [], crossref: [] };
+          if (id) { const w = await safeLookup('openalex-work', { id: `doi:10.48550/arxiv.${id}` }); if (w) input.openalex.push(w); }
+          let pub = B.choosePublication(input);
+          if (!pub || pub.confidence !== 'high') {
+            const [oa, cr] = await Promise.all([safeLookup('openalex-search', { q: title, max: 6 }), safeLookup('crossref-search', { q: `${title} ${B.lastNames(e.fields.author || '')[0] || ''}`, max: 5 })]);
+            pub = B.choosePublication({ ...input, openalex: [...input.openalex, ...(oa || [])], crossref: cr || [] }) || pub;
+          }
+          r.checked = true;
+          if (pub) {
+            r.pub = pub;
+            let text = null;
+            if (pub.doi) { try { text = B.cleanImported(await bibLookup('doi-bib', { doi: pub.doi }), e.key); } catch { text = null; } }
+            if (!text) {
+              const ax = axMap.get(id);
+              text = B.entryFromMeta({ ...pub, authors: ax ? ax.authors : pub.authors }, e.key);
+            }
+            r.newText = text;
+            r.selected = pub.confidence === 'high';
+          }
+        } catch (err) { r.checked = true; r.error = err.message; }
+        bibState.upgrade.done += 1;
+        renderBibView();
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    bibState.upgrade.running = false;
+    renderBibView();
+  }
+
+  // ---- writing to .bib files (open it if needed, then come back)
+
+  async function waitForFile(name, ms = 6000) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      try { const r = await mw('getDoc', {}, 2000); if (r.fileName === name && r.doc != null) return r; } catch { /* ignore */ }
+      await new Promise((res) => setTimeout(res, 250));
+    }
+    return null;
+  }
+
+  /** Run fn(doc) -> {changes}|{edits} on the named file, opening it via the file tree when needed. */
+  async function editFile(name, fn) {
+    let back = null;
+    let cur = await mw('getDoc', {}, 3000);
+    if (cur.fileName !== name) {
+      back = cur.fileName;
+      if (!(await mw('openFile', { name }))) throw new Error(`파일 트리에서 ${name} 을 찾지 못했습니다`);
+      cur = await waitForFile(name);
+      if (!cur) throw new Error(`${name} 을 열지 못했습니다`);
+    }
+    const plan = fn(cur.doc);
+    if (plan.changes) await mw('applyChanges', { changes: plan.changes, fileName: name });
+    else if (plan.edits) await mw('insertAt', { edits: plan.edits, anchor: cur.doc.slice(0, Math.max(0, ...plan.edits.map((e) => e.pos))), fileName: name });
+    if (back) { await mw('openFile', { name: back }).catch(() => false); await waitForFile(back, 4000); }
+    return true;
+  }
+
+  function targetBibName() {
+    const pj = bibState.project;
+    const open = pj.bibs.find((b) => b.open);
+    return open ? open.name : pj.bibs.length === 1 ? pj.bibs[0].name : (pj.bibs.find((b) => /ref|bib|biblio/i.test(b.name)) || pj.bibs[0] || {}).name;
+  }
+
+  async function buildEntryText(c, key) {
+    if (c.bibtex) return B.cleanImported(c.bibtex, key);
+    if (c.doi) { try { const t = await bibLookup('doi-bib', { doi: c.doi }); const cleaned = B.cleanImported(t, key); if (cleaned) return cleaned; } catch { /* fall back */ } }
+    return B.entryFromMeta(c, key);
+  }
+
+  async function addCandidate(c, fixedKey, insertCite) {
+    const pj = bibState.project;
+    const key = fixedKey || B.uniqueKey(B.makeKey(c.authors, c.year, c.title), pj.keys);
+    const text = await buildEntryText(c, key);
+    if (!text) { toast('BibTeX 를 만들지 못했습니다'); return; }
+    // \cite first, while the .tex file is still open
+    if (insertCite && !pj.isBibFile) {
+      try {
+        const ctx = await mw('getContext');
+        const plan = P.insertionPlan(`\\cite{${key}}`, ctx.doc, ctx.head, 'inline');
+        await mw('apply', { from: plan.pos, to: plan.pos, expected: '', text: plan.text.replace(/^ (?=\\cite)/, '~'), ctxBefore: ctx.doc.slice(Math.max(0, plan.pos - 120), plan.pos), ctxAfter: ctx.doc.slice(plan.pos, plan.pos + 120), fileName: ctx.fileName });
+      } catch (e) { toast(`\\cite 삽입 실패: ${explain(e.message)}`); }
+    }
+    const name = targetBibName();
+    if (!name) { copyText(text); toast('.bib 파일이 없어 BibTeX 를 복사했습니다. .bib 파일에 붙여넣으세요.'); return; }
+    try {
+      await editFile(name, (doc) => ({ edits: B.appendEdits(doc, [text]) }));
+      pj.keys.add(key);
+      toast(`${name} 에 ${key} 를 추가했습니다`);
+    } catch (e) {
+      copyText(text);
+      toast(`${e.message} — BibTeX 를 복사했습니다`);
+    }
+  }
+
+  async function applyUpgrades() {
+    const rows = bibState.upgrade.rows.filter((r) => r.selected && r.newText);
+    const byFile = new Map();
+    for (const r of rows) { if (!byFile.has(r.entry.file)) byFile.set(r.entry.file, []); byFile.get(r.entry.file).push(r); }
+    let n = 0;
+    for (const [file, list] of byFile) {
+      try {
+        await editFile(file, (doc) => {
+          // Re-locate each entry by key in the live document (it may have changed).
+          const live = new Map(B.parseBib(doc).entries.map((e) => [e.key, e]));
+          const changes = list.map((r) => live.get(r.entry.key)).map((e, i) => e && ({ from: e.from, to: e.to, expected: doc.slice(e.from, e.to), insert: list[i].newText })).filter(Boolean);
+          n += changes.length;
+          return { changes };
+        });
+      } catch (e) { toast(`${file}: ${explain(e.message)}`); }
+    }
+    if (n) toast(`${n}개 항목을 출판본으로 정정했습니다 (${MOD}+Z 로 되돌리기)`);
+    bibState.project = await loadBibProject().catch(() => bibState.project);
+    bibState.upgrade = null;
+    renderBibView();
+  }
+
+  async function protectTitles() {
+    const issues = (bibState.auditIssues || []).filter((i) => i.kind === 'unprotected');
+    const byFile = new Map();
+    for (const i of issues) { if (!byFile.has(i.entry.file)) byFile.set(i.entry.file, []); byFile.get(i.entry.file).push(i); }
+    for (const [file, list] of byFile) {
+      try {
+        await editFile(file, (doc) => {
+          const live = new Map(B.parseBib(doc).entries.map((e) => [e.key, e]));
+          const changes = [];
+          for (const it of list) {
+            const e = live.get(it.key);
+            if (!e) continue;
+            const raw = doc.slice(e.from, e.to);
+            const m = /(\btitle\s*=\s*)([{"])([\s\S]*?)([}"])\s*(,|\n|$)/i.exec(raw);
+            if (!m || m[3] !== e.fields.title) continue;
+            const at = e.from + m.index + m[1].length + 1;
+            changes.push({ from: at, to: at + m[3].length, expected: m[3], insert: B.protectTitle(m[3]) });
+          }
+          return { changes };
+        });
+      } catch (e) { toast(`${file}: ${explain(e.message)}`); }
+    }
+    bibState.project = await loadBibProject().catch(() => bibState.project);
+    renderBibView();
+  }
+
+  ui.bibView.addEventListener('click', async (e) => {
+    const t = e.target;
+    if (t.closest('.bib-reload')) { openBib(bibState.mode); return; }
+    if (t.closest('.bib-search')) { bibSearch(); return; }
+    if (t.closest('.bib-find-missing')) { findMissing(); return; }
+    if (t.closest('.bib-check-pub')) { checkPublications(); return; }
+    if (t.closest('.bib-apply-up') && e.isTrusted) { applyUpgrades(); return; }
+    if (t.closest('.bib-copy-up')) { copyText(bibState.upgrade.rows.filter((r) => r.selected && r.newText).map((r) => r.newText).join('\n\n')); return; }
+    if (t.closest('.bib-protect') && e.isTrusted) { protectTitles(); return; }
+    const li = t.closest('li[data-audit]');
+    if (li) {
+      const it = (bibState.auditIssues || [])[Number(li.dataset.audit)];
+      if (it && it.entry.open) { const pj = bibState.project; const f = pj.bibs.find((b) => b.name === it.entry.file); const line = f.text.slice(0, it.entry.from).split('\n').length; mw('selectLines', { line, text: lineText(f.text, line) }).catch(() => {}); }
+      return;
+    }
+    const btn = t.closest('.bib-add-one, .bib-copy-one');
+    if (!btn) return;
+    const mode = btn.dataset.mode;
+    const key = btn.dataset.key;
+    const c = mode === 'missing' ? bibState.missing.byKey[key].candidates[Number(btn.dataset.i)] : bibState.results[Number(btn.dataset.i)];
+    if (!c) return;
+    if (btn.classList.contains('bib-copy-one')) { copyText(await buildEntryText(c, key || B.uniqueKey(B.makeKey(c.authors, c.year, c.title), bibState.project.keys))); return; }
+    if (!e.isTrusted) return;
+    btn.disabled = true;
+    const cite = mode === 'add' && !!(ui.bibView.querySelector('.bib-cite') || {}).checked;
+    await addCandidate(c, mode === 'missing' ? key : '', cite);
+    bibState.project = await loadBibProject().catch(() => bibState.project);
+    renderBibView();
+  });
+  ui.bibView.addEventListener('change', (e) => {
+    const up = e.target.closest('input[data-up]');
+    if (up) { bibState.upgrade.rows[Number(up.dataset.up)].selected = up.checked; renderBibView(); }
+  });
+  ui.bibView.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.closest('.bib-input') && !e.isComposing) { e.preventDefault(); bibSearch(); }
+  });
 
   // ------------------------------------------------------- custom / quick ---
 
@@ -1289,7 +1852,7 @@
   ui.instr.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) {
       e.preventDefault();
-      if (e.isTrusted) runCustom();
+      if (e.isTrusted && !isBusy()) runCustom();
     }
   });
 
@@ -1302,7 +1865,7 @@
       return start({ action: { id: 'directive', label: '지시문', kind: 'directive', effort: 'medium' }, autoApply });
     }
     const action = allActions().find((a) => a.id === settings.quickActionId) || C.ACTIONS[0];
-    return runAction(action, { autoApply });
+    return runAction(action, { autoApply, extra: '' }); // never pick up leftover text from the hidden box
   }
 
   // ---------------------------------------------------------- autocomplete ---
@@ -1313,7 +1876,8 @@
   const AC_BLOCK_TEXT = {
     'not-focused': '에디터에 커서가 없습니다', selection: '선택 영역이 있습니다', composing: '한글 조합 중입니다',
     preamble: '프리앰블에서는 동작하지 않습니다', 'mid-line': '줄 끝에서만 동작합니다', comment: '주석 안입니다',
-    'typing-command': 'LaTeX 명령을 입력하는 중입니다', 'inline-math': '수식 안입니다', 'math-env': '수식 환경 안입니다', 'display-math': '수식 안입니다',
+    'typing-command': 'LaTeX 명령을 입력하는 중입니다', 'inline-math': '수식 안입니다', 'math-env': '수식·코드·표·그림 환경 안입니다', 'display-math': '수식 안입니다',
+    'read-only': '읽기 전용 문서입니다', 'not-tex': '.tex 파일에서만 동작합니다', 'key-argument': '인용·참조·경로 같은 키를 입력하는 중입니다',
   };
   const acMode = () => settings.autocomplete || 'auto';
   const inEditor = (t) => !!(t && t.closest && t.closest('.cm-content'));
@@ -1392,10 +1956,9 @@
   document.addEventListener('mousedown', (e) => { if (inEditor(e.target)) { clearTimeout(AC.timer); cancelCompletion(); } }, true);
 
   // Hints from the main world (treated as untrusted: they can only cancel work).
-  window.addEventListener('message', (e) => {
-    if (e.source !== window || !e.data || e.data.channel !== 'olai:mw-event') return;
-    if (e.data.type === 'ghost-hidden') cancelCompletion();
-    if (e.data.type === 'ghost-accepted') { AC.accepted += 1; setTimeout(() => lintTick(false), 500); }
+  mwListeners.push((d) => {
+    if (d.type === 'ghost-hidden') cancelCompletion();
+    if (d.type === 'ghost-accepted') { AC.accepted += 1; setTimeout(() => lintTick(false), 500); }
   });
 
   ui.acMode.addEventListener('change', () => {

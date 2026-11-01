@@ -247,7 +247,7 @@
     m = /(?:^|\n)\s*l\.(\d+)\b/.exec(bang >= 0 ? log.slice(bang) : log);
     if (m) {
       const upto = bang >= 0 ? log.slice(0, bang) : log;
-      const opened = [...upto.matchAll(/\((?:\.\/)?([^\s()]+\.tex)/g)].map((x) => x[1]);
+      const opened = [...upto.matchAll(/(?:\(|\[file\]\s+)(?:\.\/)?([^\s()]+\.tex)/g)].map((x) => x[1]);
       return { file: opened.length ? opened[opened.length - 1] : '', line: Number(m[1]) };
     }
     m = /on input line\s+(\d+)/i.exec(log) || /\bline\s+(\d+)\b/i.exec(log);
@@ -351,7 +351,9 @@
       const parts = line.split('|').map((s) => s.trim());
       if (parts.length < 2 || !parts[0] || !parts[1]) return null;
       const kind = CUSTOM_KINDS.has(parts[2]) ? parts[2] : 'transform';
-      return { id: `custom-${i}`, cat: 'custom', label: parts[0], kind, instruction: parts[1], desc: parts[1], effort: kind === 'report' ? 'high' : 'medium', custom: true };
+      let h = 0;
+      for (const ch of parts[0]) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+      return { id: `custom-${h.toString(36)}`, cat: 'custom', label: parts[0], kind, instruction: parts[1], desc: parts[1], effort: kind === 'report' ? 'high' : 'medium', custom: true, line: i };
     }).filter(Boolean);
   }
 
@@ -455,7 +457,6 @@
       model,
       effort,
       web: !!(action.web && isClaude && s.allowWeb),
-      extraArgs: splitArgs(isClaude ? s.claudeExtraArgs : s.codexExtraArgs),
       timeoutSec: Math.min(timeoutSec, 1800),
       system,
       prompt: parts.join('\n\n'),
@@ -560,6 +561,91 @@
     return { pos, text: `\n\n${String(text).trim()}${pos < doc.length && doc[pos + 1] !== '\n' ? '\n' : ''}` };
   }
 
+  /**
+   * Safety check before applying AI output in place of `original` (C3 in docs/ANALYSIS.md).
+   * Returns [{ level: 'warn'|'info', message }]: dropped/changed \cite \ref \label, math, % comments,
+   * new numbers or citations that were not in the original (possible hallucination), unbalanced braces
+   * or environments in the output.
+   */
+  function safetyCheck(original, output, reference = '') {
+    const out = [];
+    const keysOf = (s, cmd) => {
+      const set = new Map();
+      const re = new RegExp(`\\\\(${cmd})\\*?(?:\\[[^\\]]*\\])*\\{([^}]*)\\}`, 'g');
+      let m;
+      while ((m = re.exec(s))) for (const k of m[2].split(',').map((x) => x.trim()).filter(Boolean)) set.set(k, (set.get(k) || 0) + 1);
+      return set;
+    };
+    const refText = `${original || ''}\n${reference || ''}`;
+    const diffKeys = (label, cmd) => {
+      const a = keysOf(original || '', cmd);
+      const b = keysOf(output, cmd);
+      const known = keysOf(refText, cmd);
+      const lost = [...a.keys()].filter((k) => !b.has(k));
+      const added = [...b.keys()].filter((k) => !known.has(k));
+      if (lost.length) out.push({ level: 'warn', message: `${label} 사라짐: ${lost.slice(0, 5).join(', ')}` });
+      if (added.length) out.push({ level: 'warn', message: `원문에 없던 ${label} 추가됨: ${added.slice(0, 5).join(', ')}` });
+    };
+    diffKeys('인용', 'cite\\w*|parencite|textcite|autocite|footcite');
+    diffKeys('참조', 'ref|eqref|autoref|cref|Cref|pageref');
+    if (original && original.trim()) {
+      diffKeys('라벨', 'label');
+      const math = (s) => (s.match(/\$[^$\n]+\$|\\\(|\\\[|\\begin\{(equation|align|gather|multline)\*?\}/g) || []).length;
+      if (math(output) < math(original)) out.push({ level: 'warn', message: `수식 ${math(original) - math(output)}개가 줄었습니다` });
+      const comments = (s) => (s.match(/(^|[^\\])%/gm) || []).length;
+      if (comments(output) < comments(original)) out.push({ level: 'info', message: '% 주석 일부가 사라졌습니다' });
+    }
+    {
+      const nums = (s) => new Set((s.replace(/\\(cite|ref|label|eqref|cref)\w*\{[^}]*\}/g, '').match(/\d+(?:[.,]\d+)?%?/g) || []).map((x) => x.replace(',', '.')));
+      const na = nums(refText);
+      const newNums = [...nums(output)].filter((n) => !na.has(n) && !/^(19|20)\d\d$/.test(n) && n.length > 1);
+      if (newNums.length) out.push({ level: 'warn', message: `원문·문서에 없던 숫자: ${newNums.slice(0, 6).join(', ')} (환각 여부 확인)` });
+    }
+    let depth = 0;
+    for (let i = 0; i < output.length; i++) {
+      if (output[i] === '\\') { i++; continue; }
+      if (output[i] === '{') depth++; else if (output[i] === '}') depth--;
+    }
+    const bal = (s) => { let d = 0; for (let i = 0; i < s.length; i++) { if (s[i] === '\\') { i++; continue; } if (s[i] === '{') d++; else if (s[i] === '}') d--; } return d; };
+    if (depth !== bal(original || '')) out.push({ level: 'warn', message: '중괄호 짝이 원문과 다릅니다' });
+    const envs = (s) => { const c = new Map(); for (const m of s.matchAll(/\\(begin|end)\{([^}]+)\}/g)) c.set(m[2], (c.get(m[2]) || 0) + (m[1] === 'begin' ? 1 : -1)); return [...c].filter(([, v]) => v !== 0).map(([k]) => k).sort().join(','); };
+    if (envs(output) !== envs(original || '')) out.push({ level: 'warn', message: '\\begin/\\end 짝이 맞지 않습니다' });
+    return out;
+  }
+
+  // Overleaf turns characters outside the BMP (emoji, math alphanumerics like 𝑥) into "�".
+  // Math alphanumerics are folded to plain letters; anything else outside the BMP is removed.
+  function sanitizeForOverleaf(text) {
+    let removed = 0;
+    const out = String(text).replace(/[\u{10000}-\u{10FFFF}]/gu, (ch) => {
+      const n = ch.normalize('NFKC');
+      if (!/[\u{10000}-\u{10FFFF}]/u.test(n)) return n;
+      removed++;
+      return '';
+    });
+    return { text: out, removed };
+  }
+
+  // Error-relevant part of a full LaTeX log: "!" errors with context, file:line: errors, warnings.
+  function extractLogErrors(log, max = 8000) {
+    const lines = String(log || '').split('\n');
+    const keep = [];
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      if (/^!/.test(l) || /^[^\s]+\.(tex|sty|cls|bib):\d+:/.test(l)) {
+        // include the innermost file opened before the error, then the error with a few lines of context
+        const opened = lines.slice(Math.max(0, i - 80), i).join('\n').match(/\((?:\.\/)?[^\s()]+\.tex/g);
+        if (opened) keep.push(`[file] ${opened[opened.length - 1].slice(1)}`);
+        keep.push(...lines.slice(i, i + 7));
+        i += 6;
+      } else if (/LaTeX (Error|Warning)|Undefined control|Missing|Runaway|Emergency stop|Citation .* undefined|Reference .* undefined/.test(l)) {
+        keep.push(l);
+      }
+      if (keep.join('\n').length > max) break;
+    }
+    return keep.join('\n').slice(0, max);
+  }
+
   // Turn a Markdown report into LaTeX comment lines.
   function asLatexComment(text) {
     return String(text).split('\n').map((l) => (l.trim() ? `% ${l}` : '%')).join('\n');
@@ -629,7 +715,6 @@
       model: (s.acModel || '').trim(),
       effort: C ? C.resolveEffort('claude', (s.acModel || '').trim(), s.acEffort || 'low', 'low', s) : 'low',
       web: false,
-      extraArgs: [],
       timeoutSec: 45,
       system,
       prompt: parts.join('\n\n'),
@@ -686,6 +771,7 @@
     parseDirective, splitLines, lineNumberAt, numberLines, findParagraph, findSection,
     resolveTarget, parseLogLine, parseLogLocation, resolveFixTarget, profileText, buildRequest, outputKind,
     postProcess, parseVariants, parseFix, postProcessReport, insertionText, insertionPlan, afterPlan, asLatexComment,
+    safetyCheck, sanitizeForOverleaf, extractLogErrors,
     splitArgs, parseCustomPresets,
   };
   root.OLAI = api;
