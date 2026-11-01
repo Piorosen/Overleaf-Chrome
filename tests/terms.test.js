@@ -20,7 +20,7 @@ function apply(doc, changes) {
 }
 
 test('parse and merge glossaries', () => {
-  assert.deepEqual(T.parseGlossary('dataset | data set, data-set\nbad\n | x\nX | x'), [{ preferred: 'dataset', variants: ['data set', 'data-set'] }]);
+  assert.deepEqual(T.parseGlossary('dataset | data set, data-set\nbad\n | x\nLaTeX | Latex'), [{ preferred: 'dataset', variants: ['data set', 'data-set'] }, { preferred: 'LaTeX', variants: ['Latex'] }]);
   const merged = T.mergeGlossary('dataset | data set', 'Dataset | data-set\nfine-tuning | finetuning');
   assert.equal(merged, 'dataset | data set, data-set\nfine-tuning | finetuning');
 });
@@ -60,4 +60,34 @@ test('hyphen vs spaced-only groups are low confidence; closed forms are high', (
   const byId = Object.fromEntries(groups.map((g) => [g.forms.map((f) => f.text).sort().join('/'), g.confidence]));
   assert.equal(byId['sparse attention/sparse-attention'], 'low');
   assert.equal(byId['pre-training/pretraining'], 'high');
+});
+
+const applyAll = (doc, changes) => changes.slice().sort((a, b) => b.from - a.from).reduce((o, c) => o.slice(0, c.from) + c.insert + o.slice(c.to), doc);
+const unify = (doc, glossary) => {
+  const groups = T.analyzeTerms(doc, glossary);
+  return applyAll(doc, T.planChanges(groups, new Map(groups.filter((g) => g.confidence !== 'low').map((g) => [g.id, g.preferred]))));
+};
+
+test('never rewrites LaTeX commands, keys, paths or code', () => {
+  const doc = '\\begin{document}\nA node here. \\begin{tikzpicture}\\node (a) {A};\\end{tikzpicture} \\item x \\gls{dataset} \\nameref{sec:dataset} \\addbibresource{dataset.bib} \\texttt{dataset()} \\verb|dataset| a dataset.\n\\end{document}';
+  const out = unify(doc, 'vertex | node\nentry | item\ndata set | dataset');
+  assert.match(out, /A vertex here\./);
+  assert.match(out, /\\node \(a\)/);
+  assert.match(out, /\\item x/);
+  assert.match(out, /\\gls\{dataset\} \\nameref\{sec:dataset\} \\addbibresource\{dataset\.bib\} \\texttt\{dataset\(\)\} \\verb\|dataset\| a data set\./);
+});
+
+test('nested forms, plurals, ~, case-only and t-SNE casing', () => {
+  assert.equal(unify('A deep neural network is a neural network.', 'deep neural network | neural network'), 'A deep neural network is a deep neural network.');
+  assert.equal(unify('Two data sets. One data~set. One dataset.', 'dataset | data set'), 'Two datasets. One dataset. One dataset.');
+  assert.equal(unify('We use Latex and LaTeX.', 'LaTeX | Latex'), 'We use LaTeX and LaTeX.');
+  assert.equal(unify('We use t-SNE. Then t-SNE again and tSNE once.', ''), 'We use t-SNE. Then t-SNE again and t-SNE once.');
+});
+
+test('Korean terms followed by particles, with particle agreement', () => {
+  assert.equal(unify('데이터 세트를 만들고 데이터 세트의 크기와 데이터셋을 비교한다.', '데이터셋 | 데이터 세트'), '데이터셋을 만들고 데이터셋의 크기와 데이터셋을 비교한다.');
+  assert.equal(unify('모델이 학습한다.', '신경망 | 모델'), '신경망이 학습한다.');
+  assert.equal(T.fitParticle('신경망', '가'), '이');
+  assert.equal(T.fitParticle('데이터', '을'), '를');
+  assert.equal(T.fitParticle('모델', '으로'), '로');
 });

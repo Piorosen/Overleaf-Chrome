@@ -32,3 +32,11 @@ test('single-asterisk italics without breaking math-like stars', () => {
   assert.match(M.renderMarkdown('Vaswani et al., *Attention Is All You Need*, 2017'), /<em>Attention Is All You Need<\/em>/);
   assert.doesNotMatch(M.renderMarkdown('a * b * c'), /<em>/);
 });
+
+test('URLs are not split by line refs and never swallow inline code', () => {
+  const h1 = M.renderMarkdown('see https://x.org/L42 now');
+  assert.match(h1, /<a href="https:\/\/x\.org\/L42"/);
+  assert.doesNotMatch(h1, /data-line="42"/);
+  const h2 = M.renderMarkdown('https://y.org/`a`');
+  assert.doesNotMatch(h2, /href="[^"]*<code>/);
+});

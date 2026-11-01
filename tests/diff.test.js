@@ -44,3 +44,14 @@ test('renderDiffHtml escapes markup', () => {
   assert.ok(!/[<>]/.test(withoutDiffTags));
   assert.equal(withoutDiffTags, 'a &lt;bi&gt; &amp; xy');
 });
+
+test('long rewrites still produce many small, accept/reject-able changes', () => {
+  const sent = (i, w) => `Sentence number ${i} talks about the ${w} result in some detail.`;
+  const a = Array.from({ length: 220 }, (_, i) => sent(i, 'first')).join(' ');
+  const b = Array.from({ length: 220 }, (_, i) => sent(i, i % 3 ? 'first' : 'second')).join(' ');
+  const parts = D.diffWords(a, b);
+  const changes = D.toHunks(parts).filter((h) => h.type === 'chg');
+  assert.ok(changes.length > 50, `got ${changes.length} hunks`);
+  assert.equal(parts.filter((p) => p.op !== 'ins').map((p) => p.text).join(''), a);
+  assert.equal(parts.filter((p) => p.op !== 'del').map((p) => p.text).join(''), b);
+});

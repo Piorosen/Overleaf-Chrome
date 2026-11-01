@@ -3,13 +3,16 @@
 (function (root) {
   'use strict';
 
+  const L = root.OLAI_LINT || (typeof require !== 'undefined' ? require('./lint.js') : null);
+
   // sat: packages that satisfy the need ("pkg[opt]" = package loaded with that option).
   // cmds: control sequences (without backslash); envs: environment names; re: extra pattern.
   const RULES = [
     { pkg: 'graphicx', cmds: ['includegraphics', 'resizebox', 'scalebox', 'rotatebox', 'graphicspath'], why: '그림 삽입·크기 조절' },
-    { pkg: 'amsmath', sat: ['amsmath', 'mathtools'], envs: ['align', 'align*', 'gather', 'gather*', 'multline', 'multline*', 'split', 'cases', 'pmatrix', 'bmatrix', 'vmatrix', 'Bmatrix', 'matrix', 'aligned', 'gathered', 'flalign', 'alignat'], cmds: ['eqref', 'DeclareMathOperator', 'operatorname', 'dfrac', 'tfrac', 'binom', 'intertext', 'boxed', 'numberwithin', 'tag'], why: '수식 환경·명령' },
+    { pkg: 'amsmath', sat: ['amsmath', 'mathtools'], envs: ['align', 'align*', 'gather', 'gather*', 'multline', 'multline*', 'split', 'cases', 'pmatrix', 'bmatrix', 'vmatrix', 'Bmatrix', 'matrix', 'aligned', 'gathered', 'flalign', 'alignat', 'equation*', 'subequations'], cmds: ['eqref', 'DeclareMathOperator', 'operatorname', 'dfrac', 'tfrac', 'binom', 'intertext', 'boxed', 'numberwithin', 'tag', 'text', 'boldsymbol', 'xrightarrow', 'xleftarrow', 'overset', 'underset', 'iint', 'iiint'], why: '수식 환경·명령' },
     { pkg: 'amssymb', sat: ['amssymb', 'amsfonts'], cmds: ['mathbb', 'mathfrak'], why: '\\mathbb 등 수학 글꼴' },
-    { pkg: 'amssymb', cmds: ['checkmark', 'blacksquare', 'varnothing', 'leqslant', 'geqslant', 'lesssim', 'gtrsim', 'therefore', 'because', 'nexists', 'mathbbm'], why: '수학 기호' },
+    { pkg: 'amssymb', cmds: ['checkmark', 'blacksquare', 'varnothing', 'leqslant', 'geqslant', 'lesssim', 'gtrsim', 'therefore', 'because', 'nexists'], why: '수학 기호' },
+    { pkg: 'mathrsfs', cmds: ['mathscr'], why: '\\mathscr' },
     { pkg: 'amsthm', envs: ['proof'], cmds: ['newtheorem*', 'theoremstyle', 'qedhere'], why: '정리·증명 환경' },
     { pkg: 'bm', cmds: ['bm'], why: '굵은 수학 기호 \\bm' },
     { pkg: 'mathtools', cmds: ['coloneqq', 'eqqcolon', 'mathclap', 'DeclarePairedDelimiter', 'prescript', 'shortintertext'], why: 'mathtools 명령' },
@@ -31,7 +34,7 @@
     { pkg: 'biblatex', cmds: ['printbibliography', 'addbibresource', 'parencite', 'textcite', 'autocite'], why: 'biblatex 인용' },
     { pkg: 'siunitx', cmds: ['SI', 'si', 'num', 'qty', 'unit', 'ang', 'SIrange', 'numrange', 'sisetup'], why: '숫자·단위 표기' },
     { pkg: 'algorithm', sat: ['algorithm', 'algorithm2e'], envs: ['algorithm', 'algorithm*'], why: 'algorithm 플로트' },
-    { pkg: 'algpseudocode', sat: ['algpseudocode', 'algorithmicx'], cmds: ['State', 'Require', 'Ensure', 'EndFor', 'EndIf', 'EndWhile', 'EndProcedure', 'Procedure', 'Function', 'EndFunction'], why: '의사코드 (\\State 등)' },
+    { pkg: 'algpseudocode', sat: ['algpseudocode', 'algorithmicx', 'algpseudocodex'], cmds: ['State', 'Require', 'Ensure', 'EndFor', 'EndIf', 'EndWhile', 'EndProcedure', 'Procedure', 'Function', 'EndFunction'], why: '의사코드 (\\State 등)' },
     { pkg: 'algorithmic', cmds: ['STATE', 'REQUIRE', 'ENSURE', 'ENDFOR', 'ENDIF', 'ENDWHILE'], why: '의사코드 (\\STATE 등)' },
     { pkg: 'tikz', sat: ['tikz', 'pgfplots'], envs: ['tikzpicture'], cmds: ['tikz', 'usetikzlibrary', 'tikzset'], why: 'TikZ 그림' },
     { pkg: 'pgfplots', envs: ['axis', 'semilogyaxis', 'semilogxaxis', 'loglogaxis'], cmds: ['addplot', 'pgfplotsset'], why: 'pgfplots 그래프' },
@@ -46,7 +49,7 @@
     { pkg: 'placeins', cmds: ['FloatBarrier'], why: '\\FloatBarrier' },
     { pkg: 'listings', envs: ['lstlisting'], cmds: ['lstinline', 'lstset', 'lstinputlisting'], why: '코드 목록' },
     { pkg: 'minted', envs: ['minted'], cmds: ['mintinline', 'inputminted'], why: '코드 강조 (minted, -shell-escape 필요)' },
-    { pkg: 'enumitem', re: /\\begin\{(?:itemize|enumerate|description)\}\s*\[|\\setlist\b|\\newlist\b/, why: '목록 옵션 [label=…]' },
+    { pkg: 'enumitem', sat: ['enumitem', 'enumerate', 'paralist'], re: /\\begin\{(?:itemize|enumerate|description)\}\s*\[|\\setlist\b|\\newlist\b/, why: '목록 옵션 [label=…]' },
     { pkg: 'todonotes', cmds: ['todo', 'listoftodos', 'missingfigure'], why: '\\todo 메모' },
     { pkg: 'soul', sat: ['soul', 'soulutf8'], cmds: ['hl', 'st'], why: '형광펜 \\hl' },
     { pkg: 'ulem', cmds: ['uline', 'sout', 'uwave'], why: '밑줄·취소선' },
@@ -78,12 +81,32 @@
     { pkg: 'kotex', sat: ['kotex', 'xeCJK', 'CJKutf8', 'luatexko', 'ko.TeX', 'kotex-utf'], re: /[가-힣]/, body: true, why: '본문에 한글 (XeLaTeX/LuaLaTeX 컴파일러 권장)' },
   ];
 
+  // Conservative knowledge of what classes / venue styles load (only well-established cases).
+  const CLASS_LOADS = [
+    [/^ams(art|book|proc)$/, ['amsmath', 'amsthm', 'amsfonts']],
+    [/^acmart$/, ['amsmath', 'amsfonts', 'amssymb', 'graphicx', 'xcolor', 'hyperref', 'natbib', 'booktabs', 'caption']],
+    [/^beamer$/, ['graphicx', 'xcolor', 'hyperref', 'amsmath', 'amssymb', 'amsthm', 'url']],
+    [/^elsarticle$/, ['natbib', 'graphicx']],
+    [/^revtex4(-\d)?$/, ['natbib', 'graphicx']],
+    [/^(memoir)$/, ['url']],
+  ];
+  const STYLE_LOADS = [
+    [/^neurips_?\d{4}$|^nips_?\d{4}$/, ['natbib']],
+    [/^icml\d{4}$/, ['natbib', 'hyperref', 'url']],
+    [/^iclr\d{4}_conference$/, ['natbib', 'fancyhdr']],
+    [/^(acl|naacl|emnlp|eacl|coling)(\d{4})?$/, ['natbib', 'xcolor', 'hyperref', 'url']],
+    [/^(cvpr|iccv|wacv)$/, ['hyperref', 'url']],
+    [/^aaai\d{2}$/, ['natbib', 'graphicx', 'url']],
+    [/^jmlr2e$/, ['natbib', 'graphicx', 'url', 'amsmath', 'amssymb']],
+  ];
+  const VENUE_STYLE_RE = /^(neurips|nips|icml|iclr|acl|naacl|emnlp|eacl|coling|cvpr|iccv|eccv|wacv|aaai|ijcai|kdd|sigir|www|chi|uist|interspeech|icassp|miccai|mlsys|colm|tmlr|jmlr|corl|rss|icra|iros|aistats|uai|llncs|splncs|IEEEtran|ieeeconf|acmart|elsarticle)/i;
+
   // TikZ libraries used by common syntax (our TikZ action produces these).
   const TIKZ_LIBS = [
     { lib: 'arrows.meta', re: /-\{?\s*(Stealth|Latex|Triangle|Kite|Circle|Square|To|Rays|Bar)\b|\b(Stealth|Latex)\s*\[/, why: '화살표 끝 모양' },
     { lib: 'positioning', re: /\b(above|below|left|right)(\s+(left|right))?\s*=\s*([-\d.]+\s*(cm|mm|pt|em|ex)?\s+)?of\b|node\s+distance/, why: '"right=of" 배치' },
     { lib: 'calc', re: /\(\$[^$]*\$\)/, why: '좌표 계산 ($...$)' },
-    { lib: 'shapes.geometric', re: /\b(diamond|ellipse|regular polygon|trapezium|cylinder|star)\b/, why: '도형 (diamond 등)' },
+    { lib: 'shapes.geometric', re: /\bshape\s*=\s*(diamond|ellipse|regular polygon|trapezium|cylinder|star)\b|[[,]\s*(diamond|ellipse|regular polygon|trapezium|cylinder|star)\s*[,\]]/, why: '노드 모양 (diamond, ellipse 등)' },
     { lib: 'fit', re: /\bfit\s*=/, why: 'fit=' },
     { lib: 'backgrounds', re: /on background layer|\bbackground rectangle\b/, why: '배경 레이어' },
     { lib: 'decorations.pathreplacing', re: /decoration\s*=\s*\{?\s*brace|decorate\b/, why: '중괄호 장식' },
@@ -92,11 +115,12 @@
     { lib: 'quotes', re: /edge\s*\["/, why: 'edge["label"]' },
   ];
 
+  // Same-length masking from lint.js (correct % handling, code/verbatim/\iffalse blocks).
   function stripComments(text) {
-    return String(text).replace(/(^|[^\\])%[^\n]*/g, '$1');
+    return L ? L.maskComments(String(text)) : String(text).replace(/(^|[^\\])%[^\n]*/g, '$1');
   }
   function stripVerbatim(text) {
-    return text.replace(/\\begin\{(verbatim|lstlisting|minted|comment)\}[\s\S]*?\\end\{\1\}/g, '').replace(/\\verb(.).*?\1/g, '');
+    return L ? L.maskCode(text) : text;
   }
   function escapeRe(s) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -116,10 +140,21 @@
       }
     }
     const cls = /\\documentclass\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}/.exec(src);
+    const docClass = cls ? cls[1].trim() : '';
+    // Packages that a class or a well-known venue style loads by itself.
+    const add = (name) => { if (!pkgs.has(name)) pkgs.set(name, new Set()); };
+    for (const [re, list] of CLASS_LOADS) if (re.test(docClass)) list.forEach(add);
+    const styles = [...pkgs.keys()];
+    for (const st of styles) for (const [re, list] of STYLE_LOADS) if (re.test(st)) list.forEach(add);
+    // Preamble split into other files: \input{preamble}, \include, subfiles — we cannot see it.
+    const beginAt = src.search(/\\begin\{document\}/);
+    const preambleSrc = beginAt >= 0 ? src.slice(0, beginAt) : src;
+    const externalPreamble = /\\(input|include|subfile)\s*\{/.test(preambleSrc) || /^subfiles$/.test(docClass);
+    const venueStyle = styles.find((st) => VENUE_STYLE_RE.test(st)) || '';
     const libs = new Set();
     const lre = /\\use(?:tikz|pgf)library\s*\{([^}]*)\}/g;
     while ((m = lre.exec(src))) for (const l of m[1].split(',').map((s) => s.trim()).filter(Boolean)) libs.add(l);
-    return { pkgs, docClass: cls ? cls[1].trim() : '', libs, hasPreamble: !!cls };
+    return { pkgs, docClass, libs, hasPreamble: !!cls, externalPreamble, venueStyle };
   }
 
   function userDefinedCommands(doc) {
@@ -127,7 +162,7 @@
     const out = new Set();
     const res = [
       /\\(?:re)?newcommand\*?\s*\{?\\([A-Za-z@]+)/g,
-      /\\(?:providecommand|DeclareRobustCommand)\*?\s*\{?\\([A-Za-z@]+)/g,
+      /\\(?:providecommand|DeclareRobustCommand|NewDocumentCommand|RenewDocumentCommand|DeclareDocumentCommand|ProvideDocumentCommand|NewExpandableDocumentCommand)\*?\s*\{?\\([A-Za-z@]+)/g,
       /\\(?:DeclareMathOperator|DeclarePairedDelimiter)\*?\s*\{\\([A-Za-z@]+)\}/g,
       /\\def\s*\\([A-Za-z@]+)/g,
       /\\let\s*\\([A-Za-z@]+)/g,
@@ -185,10 +220,13 @@
       }
       if (idx >= 0) found.set(`rule:${ri}`, { kind: 'package', name: rule.pkg, why: rule.why, index: idx, rule });
     });
-    if (/\\begin\{tikzpicture\}|\\tikz\b/.test(src)) {
-      for (const l of TIKZ_LIBS) {
-        const m = l.re.exec(src);
-        if (m) found.set(`tikzlib:${l.lib}`, { kind: 'tikzlib', name: l.lib, why: l.why, index: m.index });
+    // TikZ libraries: only look inside tikzpicture bodies and \tikzset/\tikzstyle definitions.
+    const tikzParts = [];
+    for (const m of src.matchAll(/\\begin\{tikzpicture\}[\s\S]*?\\end\{tikzpicture\}|\\tikzset\s*\{[^\n]*|\\tikzstyle[^\n]*/g)) tikzParts.push({ text: m[0], at: m.index });
+    for (const l of TIKZ_LIBS) {
+      for (const part of tikzParts) {
+        const m = l.re.exec(part.text);
+        if (m) { found.set(`tikzlib:${l.lib}`, { kind: 'tikzlib', name: l.lib, why: l.why, index: part.at + m.index }); break; }
       }
     }
     return [...found.values()].sort((a, b) => a.index - b.index);
@@ -212,7 +250,7 @@
       seen.add(`${r.kind}:${r.name}`);
       missing.push({ kind: r.kind, name: r.name, why: r.why, line: text == null ? lineOf(doc, r.index) : null });
     }
-    return { hasPreamble: loaded.hasPreamble, docClass: loaded.docClass, missing };
+    return { hasPreamble: loaded.hasPreamble, docClass: loaded.docClass, externalPreamble: loaded.externalPreamble, venueStyle: loaded.venueStyle, missing };
   }
 
   function preambleLines(items) {
@@ -230,43 +268,71 @@
    * Returns [{ pos, text }] edits (pos in `doc`), or null if `doc` has no preamble.
    */
   function insertionEdits(doc, items) {
-    const begin = doc.search(/\\begin\{document\}/);
-    const cls = /\\documentclass[^\n]*\n?/.exec(doc);
-    if (!cls || begin < 0) return null;
-    const pre = doc.slice(0, begin);
-    const lineRe = /^[ \t]*\\(?:usepackage|RequirePackage|usetikzlibrary)\b[^\n]*\n?/gm;
-    let lastEnd = cls.index + cls[0].length;
-    let lateStart = -1;
+    const masked = stripComments(doc);
+    const begin = masked.search(/\\begin\{document\}/);
+    const clsAt = masked.search(/\\documentclass\b/);
+    if (clsAt < 0 || begin < 0) return null;
+    // End offset of a command starting at `at`: skip "\name", then any [..] and {..} groups (brace-matched).
+    const commandEnd = (at) => {
+      let i = at + 1;
+      while (i < masked.length && /[A-Za-z@*]/.test(masked[i])) i++;
+      for (;;) {
+        let j = i;
+        while (j < masked.length && /[ \t\n]/.test(masked[j]) && !(masked[j] === '\n' && masked[j + 1] === '\n')) j++;
+        if (masked[j] === '[') { const c = masked.indexOf(']', j); if (c < 0) return i; i = c + 1; continue; }
+        if (masked[j] === '{') { const c = L ? L.matchBrace(masked, j) : masked.indexOf('}', j); if (c < 0) return i; i = c + 1; continue; }
+        return i;
+      }
+    };
+    const lineEndAfter = (pos) => { const nl = doc.indexOf('\n', pos); return nl < 0 ? doc.length : nl + 1; };
+    const cmds = [];
+    const re = /\\(usepackage|RequirePackage|usetikzlibrary)\b/g;
     let m;
-    while ((m = lineRe.exec(pre))) {
-      const isLate = /usepackage|RequirePackage/.test(m[0]) && /\{[^}]*\b(hyperref|cleveref)\b[^}]*\}/.test(m[0]);
-      if (isLate) { if (lateStart < 0) lateStart = m.index; } else if (lateStart < 0) lastEnd = m.index + m[0].length;
+    while ((m = re.exec(masked)) && m.index < begin) {
+      const end = commandEnd(m.index);
+      cmds.push({ kind: m[1], at: m.index, end: lineEndAfter(end - 1), text: masked.slice(m.index, end) });
+      re.lastIndex = end;
     }
-    let preEnd = cls.index + cls[0].length;
-    lineRe.lastIndex = 0;
-    while ((m = lineRe.exec(pre))) preEnd = m.index + m[0].length;
-    const ensureNl = (s, pos) => (pos > 0 && doc[pos - 1] !== '\n' ? `\n${s}` : s);
-    const normal = items.filter((i) => !(i.kind === 'package' && (i.name === 'hyperref' || i.name === 'cleveref')));
-    const late = items.filter((i) => i.kind === 'package' && (i.name === 'hyperref' || i.name === 'cleveref'));
+    const clsEnd = lineEndAfter(commandEnd(clsAt) - 1);
+    const isLate = (c) => c.kind !== 'usetikzlibrary' && /\{[^}]*\b(hyperref|cleveref)\b/.test(c.text);
+    const firstLate = cmds.find(isLate);
+    const normalCmds = cmds.filter((c) => !isLate(c) && (!firstLate || c.at < firstLate.at));
+    const lastNormalEnd = normalCmds.length ? normalCmds[normalCmds.length - 1].end : clsEnd;
+    const preEnd = cmds.length ? cmds[cmds.length - 1].end : clsEnd;
+    const tikzLoad = cmds.find((c) => c.kind !== 'usetikzlibrary' && /\{[^}]*\b(tikz|pgfplots)\b/.test(c.text));
+    const ensureNl = (s2, pos) => (pos > 0 && doc[pos - 1] !== '\n' ? `\n${s2}` : s2);
+
+    const pkgs = items.filter((i) => i.kind === 'package');
+    const libs = items.filter((i) => i.kind === 'tikzlib');
+    const normal = pkgs.filter((i) => i.name !== 'hyperref' && i.name !== 'cleveref');
+    const late = pkgs.filter((i) => i.name === 'hyperref' || i.name === 'cleveref');
     const edits = [];
-    if (normal.length) {
-      const pos = lateStart >= 0 ? lateStart : lastEnd;
-      edits.push({ pos, text: ensureNl(`${preambleLines(normal).join('\n')}\n`, pos) });
+    const normalPos = firstLate ? firstLate.at : lastNormalEnd;
+    const insertingTikz = normal.some((i) => i.name === 'tikz' || i.name === 'pgfplots');
+    // TikZ libraries go right after the line that loads tikz (existing, or the one we insert now).
+    const libsWithNormal = libs.length && (insertingTikz || !tikzLoad || tikzLoad.end <= normalPos);
+    if (normal.length || libsWithNormal) {
+      const lines = preambleLines([...normal, ...(libsWithNormal ? libs : [])]);
+      edits.push({ pos: normalPos, text: ensureNl(`${lines.join('\n')}\n`, normalPos) });
     }
+    if (libs.length && !libsWithNormal) edits.push({ pos: tikzLoad.end, text: ensureNl(`${preambleLines(libs).join('\n')}\n`, tikzLoad.end) });
     if (late.length) edits.push({ pos: preEnd, text: ensureNl(`${preambleLines(late).join('\n')}\n`, preEnd) });
     return edits;
   }
 
   // As lint issues so they show up in the "점검" list and the badge count.
   function asIssues(result) {
+    const unsure = result.externalPreamble || !!result.venueStyle || !result.hasPreamble;
     return result.missing.filter((m) => m.line).map((m) => ({
       rule: 'missing-package',
-      severity: 'warn',
+      severity: unsure ? 'info' : 'warn',
       line: m.line,
       from: 0,
       to: 0,
       message: m.kind === 'tikzlib' ? `TikZ 라이브러리 필요: \\usetikzlibrary{${m.name}} — ${m.why}` : `패키지 필요: \\usepackage{${m.name}} — ${m.why}`,
-      excerpt: result.hasPreamble ? '' : '이 파일에 프리앰블이 없습니다. main 파일에 이미 있으면 무시하세요.',
+      excerpt: !result.hasPreamble ? '이 파일에 프리앰블이 없습니다. main 파일에 이미 있으면 무시하세요.'
+        : result.externalPreamble ? '프리앰블 일부가 \\input 된 다른 파일에 있어 확인할 수 없습니다.'
+          : result.venueStyle ? `학회 스타일(${result.venueStyle})이 이미 불러왔을 수 있습니다.` : '',
     }));
   }
 

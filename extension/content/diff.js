@@ -10,8 +10,41 @@
     return String(s).match(TOKEN_RE) || [];
   }
 
+  // LCS over token arrays → [{op, text}] (callers keep n*m bounded).
+  function lcsDiff(a2, b2, push) {
+    const n = a2.length;
+    const m = b2.length;
+    const w = m + 1;
+    const L = new Uint32Array((n + 1) * w);
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        L[i * w + j] = a2[i] === b2[j] ? L[(i + 1) * w + j + 1] + 1 : Math.max(L[(i + 1) * w + j], L[i * w + j + 1]);
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < n && j < m) {
+      if (a2[i] === b2[j]) { push('eq', a2[i]); i++; j++; }
+      else if (L[(i + 1) * w + j] >= L[i * w + j + 1]) { push('del', a2[i]); i++; }
+      else { push('ins', b2[j]); j++; }
+    }
+    while (i < n) push('del', a2[i++]);
+    while (j < m) push('ins', b2[j++]);
+  }
+
+  // Sentences/lines, keeping separators attached, for coarse alignment of long texts.
+  function splitSentences(s) {
+    return String(s).match(/[^\n.!?。]*(?:[.!?。]+["')\]]*\s*|\n+|$)/g).filter((x) => x.length);
+  }
+
   // Returns [{op:'eq'|'del'|'ins', text}], adjacent ops merged.
   function diffWords(a, b) {
+    const out = [];
+    const push = (op, text) => {
+      if (!text) return;
+      const last = out[out.length - 1];
+      if (last && last.op === op) last.text += text; else out.push({ op, text });
+    };
     const A = tokenize(a);
     const B = tokenize(b);
     let pre = 0;
@@ -20,37 +53,35 @@
     while (suf < A.length - pre && suf < B.length - pre && A[A.length - 1 - suf] === B[B.length - 1 - suf]) suf++;
     const a2 = A.slice(pre, A.length - suf);
     const b2 = B.slice(pre, B.length - suf);
-    const out = [];
-    const push = (op, text) => {
-      if (!text) return;
-      const last = out[out.length - 1];
-      if (last && last.op === op) last.text += text; else out.push({ op, text });
-    };
     push('eq', A.slice(0, pre).join(''));
-
-    const n = a2.length;
-    const m = b2.length;
-    if (n * m > MAX_CELLS) {
-      push('del', a2.join(''));
-      push('ins', b2.join(''));
+    if (a2.length * b2.length <= MAX_CELLS) {
+      lcsDiff(a2, b2, push);
     } else {
-      // LCS lengths, row-major (n+1) x (m+1)
-      const w = m + 1;
-      const L = new Uint32Array((n + 1) * w);
-      for (let i = n - 1; i >= 0; i--) {
-        for (let j = m - 1; j >= 0; j--) {
-          L[i * w + j] = a2[i] === b2[j] ? L[(i + 1) * w + j + 1] + 1 : Math.max(L[(i + 1) * w + j], L[i * w + j + 1]);
+      // Long texts: align sentences first, then diff words inside each changed stretch.
+      const sa = splitSentences(a2.join(''));
+      const sb = splitSentences(b2.join(''));
+      if (sa.length * sb.length > MAX_CELLS) {
+        push('del', a2.join(''));
+        push('ins', b2.join(''));
+      } else {
+        const coarse = [];
+        lcsDiff(sa, sb, (op, text) => coarse.push({ op, text }));
+        let delBuf = '';
+        let insBuf = '';
+        const flush = () => {
+          if (!delBuf && !insBuf) return;
+          const da = tokenize(delBuf);
+          const db = tokenize(insBuf);
+          if (da.length * db.length <= MAX_CELLS) lcsDiff(da, db, push);
+          else { push('del', delBuf); push('ins', insBuf); }
+          delBuf = '';
+          insBuf = '';
+        };
+        for (const c of coarse) {
+          if (c.op === 'eq') { flush(); push('eq', c.text); } else if (c.op === 'del') delBuf += c.text; else insBuf += c.text;
         }
+        flush();
       }
-      let i = 0;
-      let j = 0;
-      while (i < n && j < m) {
-        if (a2[i] === b2[j]) { push('eq', a2[i]); i++; j++; }
-        else if (L[(i + 1) * w + j] >= L[i * w + j + 1]) { push('del', a2[i]); i++; }
-        else { push('ins', b2[j]); j++; }
-      }
-      while (i < n) push('del', a2[i++]);
-      while (j < m) push('ins', b2[j++]);
     }
     push('eq', A.slice(A.length - suf).join(''));
     return out;

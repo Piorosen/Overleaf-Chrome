@@ -16,8 +16,12 @@
     s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
     s = s.replace(/(^|[\s("'])\*([^*\s][^*\n]*?)\*(?=[\s).,;:!?"']|$)/g, '$1<em>$2</em>');
+    // URLs first (protected), so "https://x.org/L42" is not split into a line link; placeholders
+    // (\u0000) never become part of a URL.
+    const urls = [];
+    s = s.replace(/(https?:\/\/[^\s<>()"'\u0000]+[^\s<>()"'.,;:!?\u0000])/g, (m) => { urls.push(m); return `\u0001${urls.length - 1}\u0001`; });
     s = s.replace(/\bL(\d{1,6})(?:\s*[-–~]\s*L?(\d{1,6}))?\b/g, (m, a, b) => `<a class="lref" href="#" data-line="${a}"${b ? ` data-end="${b}"` : ''}>${m}</a>`);
-    s = s.replace(/(https?:\/\/[^\s<>()"']+[^\s<>()"'.,;:!?])/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+    s = s.replace(/\u0001(\d+)\u0001/g, (m, i) => `<a href="${urls[Number(i)]}" target="_blank" rel="noopener noreferrer">${urls[Number(i)]}</a>`);
     s = s.replace(/\u0000(\d+)\u0000/g, (m, i) => `<code>${esc(codes[Number(i)])}</code>`);
     return s;
   }

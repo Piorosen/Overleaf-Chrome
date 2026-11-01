@@ -26,7 +26,7 @@ test('alternatives and options satisfy a need', () => {
 
 test('comments, verbatim and user-defined macros do not trigger needs', () => {
   assert.deepEqual(names(K.analyze(DOC('', '% \\toprule in a comment\n\\begin{verbatim}\\multirow\\end{verbatim}'))), []);
-  assert.deepEqual(names(K.analyze(DOC('\\newcommand{\\bm}[1]{\\boldsymbol{#1}}\n', '$\\bm{x}$'))), []);
+  assert.deepEqual(names(K.analyze(DOC('\\newcommand{\\bm}[1]{\\mathbf{#1}}\n', '$\\bm{x}$'))), []);
 });
 
 test('tikz libraries and Korean text', () => {
@@ -63,4 +63,26 @@ test('preambleLines and asIssues', () => {
   const issues = K.asIssues(K.analyze(DOC('', '\\includegraphics{x}')));
   assert.equal(issues[0].rule, 'missing-package');
   assert.match(issues[0].message, /graphicx/);
+});
+
+test('class/style awareness, external preamble, URLs with % and \\\\% line ends', () => {
+  assert.deepEqual(names(K.analyze('\\documentclass{acmart}\n\\begin{document}\n\\includegraphics{x} \\citep{a} \\toprule\n\\end{document}')), []);
+  const neur = K.analyze('\\documentclass{article}\n\\usepackage{neurips_2025}\n\\begin{document}\n\\citep{a} \\toprule\n\\end{document}');
+  assert.deepEqual(names(neur), ['booktabs']);
+  assert.equal(K.asIssues(neur)[0].severity, 'info'); // venue style may load it
+  const ext = K.analyze('\\documentclass{article}\n\\input{preamble}\n\\begin{document}\n\\toprule\n\\end{document}');
+  assert.equal(ext.externalPreamble, true);
+  assert.deepEqual(names(K.analyze(DOC('', '\\url{https://x.org/a%20b} and a line \\\\% \\toprule old'))), ['url']);
+  assert.deepEqual(names(K.analyze(DOC('\\usepackage{tikz}\n', 'A star graph. \\begin{tikzpicture}\\draw (0,0) ellipse (1 and 2);\\end{tikzpicture}'))), []);
+});
+
+test('insertion respects multi-line \\usepackage and puts TikZ libraries after tikz', () => {
+  const apply = (doc, edits) => edits.slice().sort((a, b) => b.pos - a.pos).reduce((o, e) => o.slice(0, e.pos) + e.text + o.slice(e.pos), doc);
+  const pre = (d) => d.split('\\begin{document}')[0];
+  let d = '\\documentclass[\n 11pt\n]{article}\n\\usepackage{amsmath,\n  amssymb,\n  graphicx}\n\\begin{document}\nx\n\\end{document}';
+  assert.equal(pre(apply(d, K.insertionEdits(d, [{ kind: 'package', name: 'booktabs' }]))), '\\documentclass[\n 11pt\n]{article}\n\\usepackage{amsmath,\n  amssymb,\n  graphicx}\n\\usepackage{booktabs}\n');
+  d = '\\documentclass[\n 11pt\n]{article}\n\\begin{document}\nx\n\\end{document}';
+  assert.equal(pre(apply(d, K.insertionEdits(d, [{ kind: 'package', name: 'booktabs' }]))), '\\documentclass[\n 11pt\n]{article}\n\\usepackage{booktabs}\n');
+  d = '\\documentclass{article}\n\\usepackage{hyperref}\n\\usepackage{tikz}\n\\begin{document}\nx\n\\end{document}';
+  assert.equal(pre(apply(d, K.insertionEdits(d, [{ kind: 'package', name: 'booktabs' }, { kind: 'tikzlib', name: 'calc' }]))), '\\documentclass{article}\n\\usepackage{booktabs}\n\\usepackage{hyperref}\n\\usepackage{tikz}\n\\usetikzlibrary{calc}\n');
 });

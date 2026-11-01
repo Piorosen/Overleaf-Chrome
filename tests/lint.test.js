@@ -84,3 +84,39 @@ test('clean document has no errors', () => {
   assert.equal(c.error, 0);
   assert.equal(c.warn, 0);
 });
+
+test('no catastrophic backtracking: macro files, .bib-like text, long runs stay fast', () => {
+  const cases = [
+    Array.from({ length: 60 }, (_, i) => `\\newcommand{\\m${i}}{\\textbf{v ${i}}}`).join('\n'),
+    Array.from({ length: 300 }, (_, i) => `@article{k${i},\n  title={T ${i}},\n  author={A and B}\n}`).join('\n'),
+    `\\begin{document}\n${' '.repeat(80000)}x\n\\end{document}`,
+    `\\begin{document}\n${'汉'.repeat(90000)}。\n\\end{document}`,
+  ];
+  for (const doc of cases) {
+    const t0 = Date.now();
+    L.lintLatex(doc);
+    assert.ok(Date.now() - t0 < 1000, `took ${Date.now() - t0} ms`);
+  }
+});
+
+test('comments, URLs, code and macro templates are not misread', () => {
+  assert.ok(!has(BASE('\\url{https://x.org/a%20b} fine.'), 'brace-unclosed'));
+  assert.ok(has(BASE('a & b \\\\% the the "q"\n'), 'repeated-word') === false);
+  assert.ok(!has(BASE('\\verb|\\begin{itemize}| and \\lstinline{\\end{itemize}}'), 'env-unclosed'));
+  assert.ok(!has(BASE('\\iffalse\n\\begin{itemize}\n\\fi'), 'env-unclosed'));
+  assert.ok(!has(BASE('\\newcommand{\\mk}[1]{\\label{fig:#1}}\n\\newcommand{\\mkb}[1]{\\label{fig:#1}}'), 'duplicate-label'));
+  assert.ok(!has(BASE('\\def\\figref#1{figure~\\ref{#1}}'), 'undefined-ref'));
+});
+
+test('sub-figures, acronym definitions, umlauts and textual citations', () => {
+  const sub = '\\begin{figure}\\subfloat[A\\label{fig:a}]{x}\\caption{Main}\\label{fig:m}\\end{figure}\n\\ref{fig:a}\\ref{fig:m}';
+  assert.ok(!has(BASE(sub), 'label-before-caption'));
+  assert.ok(!has(BASE('\\section{RELATED WORK}\nText.'), 'acronym-undefined'));
+  assert.ok(!has(BASE('\\newacronym{cnn}{CNN}{convolutional neural network}\nA CNN works.'), 'acronym-undefined'));
+  assert.ok(!has(BASE('A network (\\emph{CNN}) works. The CNN is good.'), 'acronym-undefined'));
+  assert.ok(!has(BASE('Sch\\"olkopf and M\\"uller wrote it.'), 'straight-quotes'));
+  assert.ok(!has(BASE('Many methods, e.g., \\cite{a}, work.'), 'cite-after-punct'));
+  assert.ok(has(BASE('as shown in Figs. 1 and 2, results improve.'), 'hardcoded-ref'));
+  assert.ok(has(BASE('그림 1 에서 보듯이 성능이 좋다.'), 'hardcoded-ref'));
+  assert.ok(!has(BASE('He did not resign. We re-sign it.'), 'hyphen-variant'));
+});
