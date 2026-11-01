@@ -192,7 +192,7 @@
         if (!w.includes('-')) continue;
         const closed = w.replace(/-/g, '');
         const open = w.replace(/-/g, ' ');
-        const other = words.has(closed) ? closed : (new RegExp(`\\b${open}\\b`).test(lower) ? open : null);
+        const other = words.has(closed) ? closed : null; // hyphen vs space is often legitimate (compound modifiers)
         if (other && !reported.has(w)) {
           reported.add(w);
           add('hyphen-variant', 'warn', pos, pos + w.length, `표기 혼용: "${w}" 와 "${other}" — 하나로 통일하세요`);

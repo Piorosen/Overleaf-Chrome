@@ -285,9 +285,16 @@
       desc: '영문을 직역해 의도대로 쓰였는지 확인',
       instruction: 'Translate the English target text back into Korean as literally as possible so the author can check the meaning. Then list spots where the English may convey a different meaning, nuance or strength of claim than probably intended, with suggested English fixes.' },
 
-    // ---- 점검 (local)
-    { id: 'lint', cat: 'check', label: '로컬 점검 실행', kind: 'lint',
-      desc: 'AI 없이 즉시: 라벨·참조·약어·표기 혼용 등' },
+    // ---- 점검 (local, plus one AI helper)
+    { id: 'lint', cat: 'check', label: '문제 목록', kind: 'lint',
+      desc: 'AI 없이 즉시: 라벨·참조·약어·표기 혼용·누락 패키지 등' },
+    { id: 'terms', cat: 'check', label: '용어 통일', kind: 'terms',
+      desc: '용어집·하이픈·영미 철자 변형을 찾아 문서 전체에 한 번에 통일 (⌘Z 한 번으로 취소)' },
+    { id: 'packages', cat: 'check', label: '필요한 패키지', kind: 'packages',
+      desc: '본문이 쓰는 명령·환경에 필요한 \\usepackage / \\usetikzlibrary 를 찾아 프리앰블에 추가' },
+    { id: 'glossary-ai', cat: 'check', label: '용어집 제안 (AI)', kind: 'report', effort: 'high', scope: 'document', glossary: true,
+      desc: 'AI가 용어 불일치를 찾아 용어집을 제안 → 저장 후 "용어 통일"로 적용',
+      instruction: 'Find terminology inconsistencies in the document: the same concept written with different words, spellings, hyphenation, capitalization or abbreviations (e.g., "data set"/"dataset", "Transformer"/"transformer", "fine-tuning"/"finetuning", an abbreviation used before it is defined). Briefly list the problems with line references (L<n>). Then output a ```glossary code block with one line per concept in the form "preferred term | variant1, variant2", where each variant is spelled exactly as it appears in the text and the preferred term follows the venue convention. Only include real variants that occur in the document.' },
   ];
 
   const api = {
