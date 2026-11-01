@@ -1,0 +1,20 @@
+{
+  "name": "overleaf-ai-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome extension that writes and edits Overleaf documents with the local Claude Code or Codex CLI",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:e2e": "node tests/e2e/browser.e2e.js",
+    "install-host": "./scripts/install-host.sh",
+    "uninstall-host": "./scripts/uninstall-host.sh",
+    "icons": "python3 scripts/make-icons.py",
+    "package": "cd extension && zip -r ../overleaf-ai-extension.zip . -x '.*'"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.43.1"
+  }
+}
