@@ -12,6 +12,7 @@ API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
 | 분류 | 기능 |
 | --- | --- |
 | **에이전트** | 여러 단계 작업을 맡기면 Claude 가 **프로젝트 파일 목록·읽기·검색, 컴파일 로그, 로컬 점검, 문헌 DB 조회**를 스스로 쓰고, 수정은 **제안 카드**로 올립니다(승인해야 적용). 대화가 이어지며, 이전 제안의 적용·거절 결과를 에이전트가 압니다 |
+| **그림** (matplotlib) | 표·숫자를 선택하거나 설명을 쓰면 AI 가 matplotlib 코드를 쓰고, 브리지가 **샌드박스**에서 실행해 미리보기를 보여 줍니다. 예시 디자인 10종(학습 곡선·막대 비교·Ablation·성능-비용 산점도·혼동 행렬·분포·다중 패널·스케일링·시계열·파이프라인 도식), "범례를 위로" 같은 말로 고치기, 코드 직접 수정, **프로젝트에 업로드 + `figure` 환경 삽입**(`figures/이름.pdf` + 재현용 `.py`) |
 | **자동완성** | 입력을 멈추면 회색 제안 표시 → `Tab` 수락, `⌘/Ctrl+→` 단어 수락, `Esc` 닫기. 수동 모드는 `Alt(⌥)+\` |
 | **교정** | 다듬기 · 문법 교정 · **한국어 맞춤법** · **학위논문 문체** · 학술체로 · 간결하게 · 명료하게 · 문장 나누기/합치기 · 흐름 개선 · 주장 완화/단정 · 능동태 · 상투 표현 제거 · 다른 표현 3개 · 단어 대안 |
 | **작성** | 이어쓰기 · 메모→문단 · 구체화 · 주제문 강화 · 연결 문장 · 제목 후보 · 초록 · 기여점 · 결론 · 한계점 · 키워드 · 하이라이트 · 리뷰 답변 · 커버레터 |
@@ -25,7 +26,7 @@ API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
 그 밖의 기능:
 - **모델·사고 수준 선택**: Claude Fable 5.1 / **Opus 5.5(기본)** / Sonnet 5.5 / Haiku 5.5 / 이전 세대 / 사용자 지정, Codex 모델. 사고 수준은 자동(교정 low · 작성 medium · 검토 high) 또는 low~max 중에서 고릅니다.
 - **결과 다듬기**: 결과 아래 입력칸에 "더 짧게", "두 번째 문장은 원문 유지"처럼 쓰면 같은 대상에 대해 이어서 고칩니다.
-- **우클릭 메뉴**: 에디터에서 텍스트를 선택하고 우클릭 → *Overleaf AI* → 다듬기·문법·간결하게·번역·맞춤법·설명·인용 필요 위치·에이전트에게 맡기기.
+- **우클릭 메뉴**: 에디터에서 텍스트를 선택하고 우클릭 → *Overleaf AI* → 다듬기·문법·간결하게·번역·맞춤법·설명·인용 필요 위치·선택한 데이터로 그림 그리기·에이전트에게 맡기기.
 - **사용량**: 패널 아래에 오늘 요청 수와 CLI 가 보고한 추정 비용, 설정 페이지에 최근 7일 합계(이 기기에만 저장, 30일 후 삭제).
 - **결과 처리**: 스트리밍 미리보기, **변경 단위 수락/거절**, 결과 직접 편집, 교체/원문 아래 추가/삽입, 후보 카드, 보고서의 `L42` 링크를 누르면 해당 줄로 이동, 주석으로 삽입, 실행 기록.
 - **기입 요청**: AI가 만든 표·알고리즘·TikZ를 적용하면, 그 결과에 필요한데 프리앰블에 없는 패키지를 알려 주고 바로 추가할 수 있습니다.
@@ -53,6 +54,8 @@ API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
          claude -p --output-format stream-json --tools ""        (문헌 기능만 WebSearch,WebFetch)
          codex exec --sandbox read-only -o <file> -
 
+ 그림:   python3 runner.py (macOS sandbox-exec / Linux bwrap) → figure.pdf + preview.png → 확장 → Overleaf 업로드 API
+
  에이전트 모드:
          claude -p --tools "" --mcp-config <0600 파일> --strict-mcp-config --allowedTools mcp__overleaf__*
                  │ stdio (MCP)
@@ -65,7 +68,7 @@ API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
 
 ## 설치
 
-필요한 것: macOS 또는 Linux(Windows 는 아래 참고), Node.js 18+, Chrome 계열 브라우저, 그리고 `claude` 또는 `codex` 중 하나 이상(자동완성과 문헌 기능은 `claude` 필요).
+필요한 것: macOS 또는 Linux(Windows 는 아래 참고), Node.js 18+, Chrome 계열 브라우저, 그리고 `claude` 또는 `codex` 중 하나 이상(자동완성과 문헌 기능은 `claude` 필요). 그림 기능은 matplotlib 이 있는 Python 3.9+ 가 필요합니다(없으면 아래 `--with-matplotlib`).
 
 1. **CLI 로그인 확인**: 터미널에서 `claude`(또는 `codex`)를 한 번 실행해 로그인되어 있는지 확인합니다.
 2. **로컬 브리지 설치**
@@ -75,12 +78,26 @@ API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
    - 호스트 파일을 `~/Library/Application Support/overleaf-ai-host/`에 복사합니다. `~/Desktop` 같은 보호 폴더 밖이라 macOS 권한 팝업이 뜨지 않습니다.
    - 로그인 셸의 `PATH`와 `node`·`claude`·`codex`의 절대 경로를 기록합니다.
    - 설치된 Chrome / Chromium / Brave / Edge / Vivaldi / Arc 모두에 호스트 매니페스트를 등록합니다.
+   - matplotlib 을 불러올 수 있는 Python 을 찾아 기록합니다. 없으면 `./scripts/install-host.sh --with-matplotlib` 로 브리지 폴더 안에 전용 가상환경(`pyenv/`, matplotlib·numpy)을 만듭니다. 특정 Python 을 쓰려면 `OLAI_PYTHON=/경로/python ./scripts/install-host.sh`.
 3. **확장 로드**: `chrome://extensions`에서 *개발자 모드*를 켜고 *압축해제된 확장 프로그램을 로드* → 이 저장소의 `extension/` 폴더를 선택합니다. 확장 ID는 항상 `lbggnmchbhbpojfdpcfknoppbjpnmgnn`입니다.
 4. Overleaf 프로젝트를 열면 오른쪽 아래에 **✦ AI** 버튼이 보입니다. 패널 제목 옆 점이 초록색이면 연결된 것입니다.
 
 > **Windows (시험적)**: PowerShell 에서 `powershell -ExecutionPolicy Bypass -File scripts\install-host.ps1` 을 실행합니다. 호스트를 `%LOCALAPPDATA%\overleaf-ai-host`에 복사하고 Chrome·Edge·Brave·Chromium 레지스트리(HKCU)에 등록합니다. npm 으로 설치된 `claude.cmd` 는 셸 없이 실행할 수 없어 브리지가 내부의 `cli.js`를 node 로 직접 실행합니다. 개발자 환경에서 Windows 실기 검증은 하지 않았습니다. 제거는 `scripts\uninstall-host.ps1`.
 
 > **업데이트할 때**: `git pull` 후 `./scripts/install-host.sh` 다시 실행 → `chrome://extensions`에서 확장 새로고침(⟳) → Overleaf 탭 새로고침. 설정 페이지에 브리지와 확장의 버전이 다르면 경고가 뜹니다.
+
+## 그림 (그림 탭)
+
+1. 결과 표나 숫자를 에디터에서 **선택**하고(선택이 없으면 예시 데이터), **예시 디자인**을 고르거나 그릴 내용을 쓴 뒤 `코드 생성 · 그리기`. 우클릭 → *선택한 데이터로 그림 그리기* 로도 엽니다.
+2. AI 가 matplotlib 코드를 쓰고, 브리지가 바로 실행해 미리보기를 보여 줍니다. 실행 오류가 나면 오류 내용을 AI 에게 돌려 한 번 자동으로 고칩니다.
+3. "범례를 위로", "흑백 인쇄용으로", "y축 0부터" 처럼 **AI로 고치기**, 또는 코드를 직접 고쳐 `실행`.
+4. 파일 경로·캡션·라벨을 확인하고 `프로젝트에 넣기` → `figures/이름.pdf`(와 재현용 `이름.py`)를 Overleaf 프로젝트에 올리고, 커서 위치(표·수식 안이면 그 환경 뒤)에 `figure` 환경을 넣습니다. `graphicx` 가 없으면 추가 버튼이 뜹니다. 같은 그림을 다시 고친 뒤에는 `프로젝트 파일 갱신`으로 파일만 덮어씁니다.
+
+- **크기**: 한 단 3.3in / 전체 폭 6.9in(`figure*`) / 본문 5.5in / 절반 2.7in. 인쇄될 크기 그대로 그리므로 7–9pt 글자가 본문과 맞습니다. 글꼴(산세리프·세리프), PDF(벡터) 또는 PNG 300dpi.
+- **기본 스타일**: 색맹 친화 Okabe–Ito 팔레트, 위·오른쪽 축선 없음, 테두리 없는 범례, PDF 글꼴 임베드(Type 42, 학회 제출 요건). 한글 라벨은 시스템 한글 글꼴(Apple SD Gothic Neo, Noto Sans CJK KR, 나눔고딕, 맑은 고딕 등)로 자동 대체됩니다.
+- **데이터 정직성**: 선택한 데이터의 숫자만 쓰도록 지시하고, 코드의 데이터 목록에 선택 영역에 없는 숫자가 있으면 경고합니다. 예시 데이터로 그린 그림에는 "예시 데이터" 경고가 붙습니다.
+- `코드 불러오기`: 프로젝트에 저장된 `.py` 를 불러와 다시 그리고 같은 파일을 갱신합니다(파일 트리에 보이는 파일만).
+- 업로드가 안 되면(권한·네트워크) `다운로드`와 `LaTeX 복사`로 직접 넣을 수 있습니다.
 
 ## 에이전트 (에이전트 탭)
 
@@ -150,6 +167,7 @@ API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
 - 호스트 매니페스트의 `allowed_origins` 때문에 **이 확장만** 브리지를 쓸 수 있습니다. CLI는 셸을 거치지 않고 인자 배열로 실행됩니다.
 - 생성 요청은 패널 클릭, 단축키, 에디터의 실제 키 입력(`isTrusted`)으로만 시작됩니다. 페이지 스크립트는 패널(닫힌 Shadow DOM)을 조작하거나 요청을 보낼 수 없습니다. 다만 페이지는 원래 문서를 가지고 있으므로, Overleaf 페이지 자체가 침해되면 문서 내용을 바꿔 프롬프트에 영향을 줄 수는 있습니다.
 - **Claude**: `--tools ""`로 파일·셸·웹 도구를 모두 끄고, `--strict-mcp-config`로 MCP 서버를, `--settings '{"disableAllHooks":true}'`로 훅을, `CLAUDE_CODE_DISABLE_CLAUDE_MDS`·`CLAUDE_CODE_DISABLE_AUTO_MEMORY`로 CLAUDE.md·자동 메모리를 끄고, `--no-session-persistence`로 세션 기록을 남기지 않습니다. `--permission-mode dontAsk`를 명시해 사용자 기본 권한 모드(예: auto)가 다른 도구를 승인하지 못하게 합니다. 예외로 **웹 문헌 기능**만 `WebSearch`와 학술 도메인(arxiv.org, doi.org, aclanthology.org 등)으로 제한한 `WebFetch`를 켭니다(설정에서 끌 수 있음).
+- **그림 코드 실행**: AI 가 쓴 Python 은 신뢰하지 않는 코드로 취급합니다. macOS 에서는 `sandbox-exec` 프로필로 **네트워크 차단, 다른 프로그램 실행 차단, 실행 폴더·matplotlib 캐시 밖 쓰기 차단, 홈 폴더 읽기 차단**(Python 설치 경로·사용자 site-packages·글꼴만 예외)을 걸고, Linux 는 `bwrap`(설치된 경우)으로 읽기 전용 루트·빈 홈·네트워크 분리를 합니다. 샌드박스가 없으면(Windows, bwrap 없는 Linux, `"pythonSandbox": false`) 자동 실행하지 않고 코드를 보여 준 뒤 사용자가 `실행`을 눌러야 합니다. 실행은 0700 임시 폴더에서 하고 끝나면 지웁니다. 코드의 `savefig()`·`show()` 는 무시되고 그림 저장은 브리지가 합니다. 업로드는 Overleaf 자체 업로드·폴더 생성 API 를 이 페이지의 로그인 세션(CSRF 토큰 포함)으로 호출합니다.
 - **에이전트 모드**: 내장 도구는 `--tools ""`로 모두 끄고 `--strict-mcp-config`로 이 브리지의 MCP 서버 하나만 연결하며, `--allowedTools`는 `mcp__overleaf__*`(웹 허용 시 제한된 WebSearch/WebFetch 추가)뿐입니다. MCP 서버는 파일·네트워크 접근 없이 도구 호출을 0600 소켓으로 브리지에 넘기고, 실제 실행은 확장이 Overleaf 페이지 안에서 합니다. 도구는 프로젝트 문서를 읽고 **제안**만 만들 수 있고, 문서 변경은 사용자가 카드에서 승인할 때만 일어납니다. 세션 기록(`--session-id`/`--resume`)은 프로젝트별 0700 폴더에만 저장되고 `uninstall-host.sh`로 지워집니다.
 - CLI 는 사용자 전용 0700 작업 폴더의 임시 폴더에서 별도 프로세스 그룹으로 실행되고, 취소·시간 초과 시 그룹 전체가 종료됩니다. 시스템 프롬프트는 명령 인자가 아니라 0600 파일로 전달됩니다.
 - CLI 추가 인자는 확장이 보내지 않고 브리지 `config.json`(`claudeExtraArgs`, `codexExtraArgs`)에서만 읽습니다. `ANTHROPIC_API_KEY`·`OPENAI_API_KEY` 환경 변수는 기본적으로 지워 구독 로그인을 씁니다(`"keepApiKeyEnv": true`로 유지 가능).
@@ -172,6 +190,9 @@ API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
 | 시간 초과 | 설정에서 제한 시간을 늘리거나 사고 수준을 낮춤 |
 | "로컬 브리지(vX)가 확장과 다릅니다" | `git pull` 후 `./scripts/install-host.sh` 다시 실행 → 확장 새로고침 |
 | "읽기 전용 문서라 적용할 수 없습니다" | 보기 권한이거나 Overleaf 저장 오류로 잠긴 상태. 결과를 복사해 쓰거나 페이지 새로고침 |
+| 그림 탭에 "matplotlib 이 없습니다" | `./scripts/install-host.sh --with-matplotlib` (브리지 전용 가상환경) 또는 원하는 Python 에 matplotlib 설치 후 설치 스크립트 다시 실행 |
+| 그림 업로드 실패 | 보기 권한이거나 세션 만료. 페이지 새로고침 후 다시, 또는 `다운로드` + `LaTeX 복사` |
+| 한글이 □ 로 나옴 | 시스템에 한글 글꼴이 없음(Linux: `fonts-noto-cjk` 또는 나눔고딕 설치) |
 | 에이전트 탭에서 "로컬 브리지를 업데이트해야 합니다" | 브리지가 v0.5 미만 → `./scripts/install-host.sh` 다시 실행 |
 | 에이전트가 제안 없이 끝남 | 요청을 더 구체적으로(파일·절 이름). 도구 호출 40회 제한에 걸리면 그때까지의 결과로 답함 |
 | 출판본·누락 인용을 못 찾음 | Semantic Scholar 요청 한도일 수 있음 → 잠시 뒤 다시, 또는 `config.json`에 `"s2ApiKey"` |
@@ -184,7 +205,9 @@ API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
   "codexExtraArgs": [],
   "s2ApiKey": "Semantic Scholar API 키 (선택)",
   "keepApiKeyEnv": false,
-  "webDomains": ["arxiv.org", "doi.org"]
+  "webDomains": ["arxiv.org", "doi.org"],
+  "pythonPath": "/opt/homebrew/bin/python3.13",
+  "pythonSandbox": true
 }
 ```
 
@@ -208,6 +231,7 @@ extension/
   content/terms.js         용어 통일 (용어집·하이픈·영미 철자)
   content/packages.js      필요한 패키지·TikZ 라이브러리 분석, 프리앰블 삽입 위치
   content/bib.js           .bib 파서·직렬화, arXiv 판별, 인용 키 수집, 출판본 선택, BibTeX 점검
+  content/figure.js        그림: 예시 디자인, 코드 생성 프롬프트, 코드·캡션 추출, 파일 이름, figure 환경, 데이터 숫자 검사
   content/bridge.js        페이지가 볼 수 없는 비공개 통신 채널(document_start)
   content/diff.js          단어 단위 diff, 변경 단위 수락/거절
   content/markdown.js      안전한 마크다운 렌더러 (L42 링크)
@@ -216,19 +240,22 @@ extension/
 host/host.js               Native Messaging 호스트 (Node 내장 모듈만 사용)
 host/mcp-server.js         에이전트용 MCP stdio 서버 (도구 호출을 브리지 소켓으로 중계)
 host/agent-tools.js        에이전트 도구 정의 (MCP 서버·호스트 공용)
+host/pyfig.js              그림 코드 실행: Python 탐지, 샌드박스 프로필, 논문 스타일을 적용하는 실행기
 scripts/                   install-host.sh/.ps1, uninstall-host.sh/.ps1, make-icons.py
 docs/FEATURES.md           기능 분석·경쟁 솔루션 비교
 tests/                     단위 테스트, 가짜 CLI 호스트 테스트, 실제 브라우저 E2E
 ```
 
 ```bash
-npm test             # 단위 테스트 + 가짜 claude/codex·가짜 HTTP API·가짜 MCP 에이전트로 브리지 테스트 (91개)
+npm test             # 단위 테스트 + 가짜 claude/codex·가짜 HTTP API·가짜 MCP 에이전트로 브리지 테스트,
+                     # 실제 Python+matplotlib 로 그림 실행·샌드박스 차단 테스트 (100개, matplotlib 없으면 그림 실행 테스트 생략)
 npm install && npm run test:e2e
                      # 실제 Chrome 에 확장을 올리고 overleaf.com URL 로 CodeMirror 6 페이지를 띄워
                      # 설치된 브리지 + 실제 claude(Haiku 5.5)로 교정·후보·보고서·지시문·자동완성·
                      # 용어 통일·패키지 기입 요청·비공개 채널·BibTeX 4종·웹 문헌 검색·분량/익명화·
-                     # 결과 다듬기·우클릭 경로·에이전트(도구 호출→제안→승인 적용)를 검증
-                     # (E2E_WEB=0: 웹 검색 생략, E2E_ONLY_BIB=1: AI 없이 BibTeX 만, E2E_ONLY_AGENT=1: 에이전트 쪽만)
+                     # 결과 다듬기·우클릭 경로·에이전트(도구 호출→제안→승인 적용)·그림(표 선택→코드→
+                     # 샌드박스 실행→업로드 요청 형식·figure 삽입 위치·graphicx·고치기→갱신)을 검증
+                     # (E2E_WEB=0: 웹 검색 생략, E2E_ONLY_BIB=1 / E2E_ONLY_AGENT=1 / E2E_ONLY_FIG=1: 해당 부분만)
 npm run package      # extension/ 을 zip 으로 묶기
 ```
 
