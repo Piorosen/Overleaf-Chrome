@@ -172,6 +172,14 @@
       head.textContent = `로컬 브리지 v${resp.hostVersion} · Node ${resp.node}`;
       const ul = document.createElement('ul');
       ul.append(cliLine('claude', resp.claude), cliLine('codex', resp.codex));
+      const py = resp.python;
+      if (py) {
+        const li = document.createElement('li');
+        li.textContent = py.ok
+          ? `python: ${py.version}${py.pkgs?.matplotlib ? ` · matplotlib ${py.pkgs.matplotlib}` : ' · matplotlib 없음 (./scripts/install-host.sh --with-matplotlib)'} · ${py.sandbox ? `샌드박스 ${py.sandbox}` : '샌드박스 없음'}  (${py.path})`
+          : `python: 사용 불가 — ${py.error || '알 수 없음'} (그림 기능에 필요)`;
+        ul.append(li);
+      }
       box.append(head, ul);
       if (resp.hostVersion !== chrome.runtime.getManifest().version) {
         const warn = document.createElement('p');

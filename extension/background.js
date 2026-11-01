@@ -33,7 +33,7 @@ chrome.runtime.onConnect.addListener((port) => {
       }
       return;
     }
-    if (msg?.type === 'run' || msg?.type === 'agent') {
+    if (msg?.type === 'run' || msg?.type === 'agent' || msg?.type === 'pyrun') {
       closeNative();
       settled = false;
       try {
@@ -59,6 +59,18 @@ chrome.runtime.onConnect.addListener((port) => {
       });
       // Rebuild the request field by field: only these reach the bridge (no CLI flags from pages).
       const r = msg.request || {};
+      if (msg.type === 'pyrun') {
+        // AI-written plotting code, run by the bridge in a sandbox (see host/pyfig.js).
+        native.postMessage({
+          type: 'pyrun',
+          code: typeof r.code === 'string' ? r.code.slice(0, 200000) : '',
+          format: r.format === 'png' ? 'png' : 'pdf',
+          font: r.font === 'serif' ? 'serif' : 'sans',
+          dpi: Number(r.dpi) || 300,
+          timeoutSec: Number(r.timeoutSec) || 90,
+        });
+        return;
+      }
       if (msg.type === 'agent') {
         native.postMessage({
           type: 'agent',
@@ -132,7 +144,7 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 
 // Right-click menu on selected text in Overleaf.
 const MENU_PATTERNS = ['https://www.overleaf.com/project/*', 'https://overleaf.com/project/*', 'https://www.overleaf.com/Project/*', 'https://overleaf.com/Project/*'];
-const MENU = [['polish', '다듬기'], ['grammar', '문법 교정'], ['concise', '간결하게'], ['academic', '학술체로'], ['to-en', '한→영'], ['to-ko', '영→한'], ['ko-spell', '한국어 맞춤법'], ['explain-ko', '한국어로 설명'], ['cite-needed', '인용 필요 위치'], ['agent', '에이전트에게 맡기기…']];
+const MENU = [['polish', '다듬기'], ['grammar', '문법 교정'], ['concise', '간결하게'], ['academic', '학술체로'], ['to-en', '한→영'], ['to-ko', '영→한'], ['ko-spell', '한국어 맞춤법'], ['explain-ko', '한국어로 설명'], ['cite-needed', '인용 필요 위치'], ['figure', '선택한 데이터로 그림 그리기…'], ['agent', '에이전트에게 맡기기…']];
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({ id: 'olai', title: 'Overleaf AI', contexts: ['selection'], documentUrlPatterns: MENU_PATTERNS });

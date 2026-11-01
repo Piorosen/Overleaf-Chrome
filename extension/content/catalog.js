@@ -91,6 +91,7 @@
     { id: 'edit', label: '교정' },
     { id: 'write', label: '작성' },
     { id: 'latex', label: 'LaTeX' },
+    { id: 'figure', label: '그림' },
     { id: 'refs', label: '문헌' },
     { id: 'review', label: '검토' },
     { id: 'translate', label: '번역' },

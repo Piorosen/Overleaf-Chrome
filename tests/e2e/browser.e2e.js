@@ -33,7 +33,7 @@ Our method encodes inputs with a sparse attention layer and decodes them with a 
 `;
 
 // A fake Overleaf page: CodeMirror 6 editor + a file tree whose items carry doc ids like Overleaf's.
-const fakePage = (doc, openName, others = []) => `<!doctype html><html><head><meta charset="utf-8"><title>Fake Overleaf</title>
+const fakePage = (doc, openName, others = []) => `<!doctype html><html><head><meta charset="utf-8"><meta name="ol-csrfToken" content="e2e-csrf"><title>Fake Overleaf</title>
 <style>body{margin:0;font-family:sans-serif}.bar{height:40px;background:#1b222c;color:#fff;display:flex;align-items:center;gap:10px;padding:0 12px}
 #editor{height:calc(100vh - 40px)} .cm-editor{height:100%}</style></head>
 <body><div class="bar">Fake Overleaf — <ul class="file-tree" style="display:flex;gap:8px;list-style:none;margin:0;padding:0">
@@ -95,6 +95,27 @@ Efficient transformers reduce the quadratic cost of attention with sparsity, low
 `;
 const AGENT_HTML = fakePage(AGENT_TEX, 'main.tex', [{ id: 'relid', name: 'related.tex' }]);
 
+const FIG_TEX = String.raw`\documentclass{article}
+\usepackage{booktabs}
+\begin{document}
+\title{Sparse Attention for Long Documents}
+\section{Results}
+\begin{table}[t]
+\centering
+\begin{tabular}{lcc}
+\toprule
+Model & Accuracy & F1 \\
+Baseline & 71.2 & 68.0 \\
+Ours & 75.4 & 72.3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+Our model improves both metrics.
+\end{document}
+`;
+const FIG_HTML = fakePage(FIG_TEX, 'main.tex');
+const figRequests = [];
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log('•', ...a);
 
@@ -122,8 +143,19 @@ async function main() {
     const page = await browser.newPage();
     page.on('pageerror', (e) => console.log('  [pageerror]', e.message));
     await page.setRequestInterception(true);
-    page.on('request', (req) => {
+    page.on('request', async (req) => {
       const u = req.url();
+      if (u.startsWith('https://www.overleaf.com/project/e2efig/folder') || /^https:\/\/www\.overleaf\.com\/Project\/e2efig\/upload/.test(u) || u.startsWith('https://www.overleaf.com/project/e2efig/entities')) {
+        let body = '';
+        try { body = (await req.fetchPostData()) || ''; } catch { body = req.postData() || ''; }
+        // CDP returns binary (multipart) bodies base64-encoded
+        if (body && !/[\s{]/.test(body.slice(0, 200)) && /^[A-Za-z0-9+/=]+$/.test(body.slice(0, 400))) body = Buffer.from(body, 'base64').toString('latin1');
+        figRequests.push({ url: u, method: req.method(), headers: req.headers(), body });
+        if (u.includes('/folder')) return req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ _id: 'figfolder1', name: 'figures', docs: [], fileRefs: [], folders: [] }) });
+        if (u.includes('/entities')) return req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ project_id: 'e2efig', entities: [{ path: '/main.tex', type: 'doc' }] }) });
+        return req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, entity_id: `e${figRequests.length}`, entity_type: 'file' }) });
+      }
+      if (u.startsWith('https://www.overleaf.com/project/e2efig')) return req.respond({ status: 200, contentType: 'text/html', body: FIG_HTML });
       if (u.startsWith('https://www.overleaf.com/Project/e2eagent/doc/relid/download')) req.respond({ status: 200, contentType: 'text/plain', body: RELATED_TEX });
       else if (u.startsWith('https://www.overleaf.com/project/e2eagent')) req.respond({ status: 200, contentType: 'text/html', body: AGENT_HTML });
       else if (u.startsWith('https://www.overleaf.com/Project/e2ebib/doc/mainid/download')) req.respond({ status: 200, contentType: 'text/plain', body: MAIN_TEX });
@@ -211,7 +243,8 @@ async function main() {
 
     const ONLY_BIB = process.env.E2E_ONLY_BIB === '1';
     const ONLY_AGENT = process.env.E2E_ONLY_AGENT === '1';
-    if (!ONLY_BIB && !ONLY_AGENT) {
+    const ONLY_FIG = process.env.E2E_ONLY_FIG === '1';
+    if (!ONLY_BIB && !ONLY_AGENT && !ONLY_FIG) {
     // ---- 1) 문법 교정 on a selection; toggle one change off; apply
     await selectText('we propose');
     await sleep(400);
@@ -404,7 +437,7 @@ async function main() {
 
     } // end of !ONLY_BIB
 
-    if (!ONLY_AGENT) {
+    if (!ONLY_AGENT && !ONLY_FIG) {
     // ---- 12) BibTeX: arXiv → published, missing citations, add by DOI, audit (real metadata APIs, no AI)
     await page.goto('https://www.overleaf.com/project/e2ebib', { waitUntil: 'networkidle0' });
     await page.waitForSelector('.cm-editor');
@@ -466,6 +499,7 @@ async function main() {
     await page.screenshot({ path: path.join(OUT, '12-bib-audit.png') });
     } // end of !ONLY_AGENT
 
+    if (!ONLY_FIG) {
     // ---- 14) agent project: stats/anonymity, follow-up refine, agent harness, right-click menu path
     await page.goto('https://www.overleaf.com/project/e2eagent', { waitUntil: 'networkidle0' });
     await page.waitForSelector('.cm-editor');
@@ -533,6 +567,82 @@ async function main() {
     assert.match(await text('agent-props'), /적용됨/);
     log('agent proposal applied ✓ — doc line:', (await docText()).split('\n').find((l) => /We train/.test(l)));
     await page.screenshot({ path: path.join(OUT, '15-agent-applied.png') });
+    } // end of !ONLY_FIG
+
+    // ---- 15) figures: table selection → matplotlib code (real Claude) → sandboxed run → upload + insert
+    await page.goto('https://www.overleaf.com/project/e2efig', { waitUntil: 'networkidle0' });
+    await page.waitForSelector('.cm-editor');
+    await page.waitForFunction(() => document.getElementById('overleaf-ai-extension-root'), { timeout: 10000 });
+    await sleep(1200);
+    const figTab = await worker.evaluate(async () => (await chrome.tabs.query({ url: 'https://www.overleaf.com/project/e2efig*' }))[0]?.id);
+    await editor(() => { const v = window.__testView; const d = v.state.doc.toString(); v.dispatch({ selection: { anchor: d.indexOf('Model &'), head: d.indexOf('\\bottomrule') } }); v.focus(); });
+    await worker.evaluate((id) => chrome.tabs.sendMessage(id, { type: 'command', command: 'action', actionId: 'figure' }), figTab);
+    await sleep(1200);
+    assert.ok(await visible('fig-view'), 'figure tab opened from the menu message');
+    const envText = await text('fig-env');
+    log('figure env:', envText);
+    assert.match(envText, /matplotlib/);
+    assert.match(await text('fig-data'), /선택한 \d+자/);
+    await clickText('chip', '막대 비교');
+    await evalOn(await one('fig-desc'), function () { this.focus(); });
+    await page.keyboard.type('Accuracy and F1 per model as grouped bars.');
+    await click(await one('fig-gen'));
+    const t3 = Date.now();
+    let figStatus = '';
+    for (let i = 0; i < 400; i++) {
+      await sleep(500);
+      figStatus = await text('fig-status');
+      if (/그렸습니다|실패/.test(figStatus) && !(await visible('fig-stop'))) break;
+    }
+    log(`figure (${((Date.now() - t3) / 1000).toFixed(1)}s):`, figStatus, '|', (await text('fig-msgs').catch(() => '')).replace(/\s+/g, ' ').slice(0, 300));
+    assert.match(figStatus, /그렸습니다/);
+    assert.ok(await visible('fig-img'), 'preview shown');
+    const imgOk = await evalOn(await one('fig-img'), function () { return this.complete && this.naturalWidth > 100; });
+    assert.ok(imgOk, 'preview image decoded (page CSP allows data: images)');
+    const code = await evalOn(await one('fig-code'), function () { return this.value; });
+    assert.match(code, /71\.2/);
+    assert.match(code, /75\.4/);
+    log('caption:', await evalOn(await one('fig-caption'), function () { return this.value; }), '| path:', await evalOn(await one('fig-path'), function () { return this.value; }));
+    await page.screenshot({ path: path.join(OUT, '16-figure.png') });
+
+    await click(await one('fig-insert-btn'));
+    for (let i = 0; i < 40 && !/완료|실패/.test(await text('fig-status')); i++) await sleep(300);
+    log('insert:', await text('fig-status'));
+    const folderReq = figRequests.find((r) => r.url.includes('/folder'));
+    assert.ok(folderReq, 'folder created');
+    assert.equal(folderReq.headers['x-csrf-token'], 'e2e-csrf');
+    assert.match(folderReq.body, /"name":"figures"/);
+    const uploads = figRequests.filter((r) => r.url.includes('/upload'));
+    assert.equal(uploads.length, 2, 'figure + code uploaded');
+    assert.match(uploads[0].url, /folder_id=figfolder1/);
+    assert.match(uploads[0].body, /name="qqfile"; filename="[\w-]+\.pdf"/);
+    assert.match(uploads[0].body, /%PDF-/);
+    assert.match(uploads[1].body, /filename="[\w-]+\.py"/);
+    const afterFig = await docText();
+    assert.match(afterFig, /\\includegraphics\[width=\\columnwidth\]\{figures\/[\w-]+\.pdf\}/);
+    assert.ok(afterFig.indexOf('\\begin{figure}') > afterFig.indexOf('\\end{table}'), 'figure placed after the table, not inside it');
+    log('figure env inserted after the table ✓');
+    if (/graphicx/.test(await text('fig-msgs'))) {
+      await click(await one('fig-pkg-add'));
+      for (let i = 0; i < 10 && !/usepackage\{graphicx\}/.test(await docText()); i++) await sleep(300);
+      assert.match(await docText(), /\\usepackage\{graphicx\}/);
+      log('graphicx added to the preamble ✓');
+    }
+
+    // revise with AI, then update the same file (no second \includegraphics)
+    await evalOn(await one('fig-fu'), function () { this.focus(); });
+    await page.keyboard.type('Start the y axis at 0 and put the legend above the plot.');
+    await click(await one('fig-fu-go'));
+    for (let i = 0; i < 400; i++) { await sleep(500); const st = await text('fig-status'); if (/그렸습니다|실패/.test(st) && !(await visible('fig-stop'))) break; }
+    log('revised:', await text('fig-status'));
+    assert.match(await text('fig-status'), /그렸습니다/);
+    assert.equal(await text('fig-insert-btn'), '프로젝트 파일 갱신');
+    await click(await one('fig-insert-btn'));
+    for (let i = 0; i < 40 && !/갱신|실패/.test(await text('fig-status')); i++) await sleep(300);
+    log('update:', await text('fig-status'));
+    assert.equal((await docText()).match(/\\includegraphics/g).length, 1);
+    assert.equal(figRequests.filter((r) => r.url.includes('/upload')).length, 4);
+    await page.screenshot({ path: path.join(OUT, '17-figure-updated.png') });
 
     await page.goto('https://www.overleaf.com/project/e2e', { waitUntil: 'networkidle0' });
     await page.waitForSelector('.cm-editor');

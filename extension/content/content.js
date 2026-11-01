@@ -12,6 +12,7 @@
   const K = globalThis.OLAI_PKG;
   const T = globalThis.OLAI_TERMS;
   const B = globalThis.OLAI_BIB;
+  const F = globalThis.OLAI_FIGURE;
   const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
   const ALT = IS_MAC ? '⌥' : 'Alt';
@@ -146,6 +147,34 @@
               <div class="row"><label class="hint agent-opt"><input type="checkbox" class="agent-web"> 웹 검색 허용</label><span class="hint agent-meta"></span><span class="grow"></span><button class="btn sm agent-stop" type="button" hidden>중지</button><button class="btn primary agent-send" type="button">보내기</button></div>
             </div>
           </div>
+          <div class="fig-view" hidden>
+            <div class="hint fig-env"></div>
+            <div class="row"><b class="fig-h">예시 디자인</b><span class="hint">고르면 그 형태로, 설명만 써도 됩니다</span></div>
+            <div class="fig-tpls"></div>
+            <textarea class="fig-desc" rows="3" placeholder="무엇을 그릴까요? 예: 세 모델의 에폭별 검증 정확도 비교 / Table 2 의 결과를 막대그래프로. 에디터에서 표·숫자를 선택하면 그 값을 데이터로 씁니다."></textarea>
+            <div class="row fig-opts">
+              <select class="fig-size" title="그림 폭 — 인쇄 크기 그대로 그려 글자 크기가 본문과 맞습니다"></select>
+              <select class="fig-font" title="글꼴"><option value="sans">산세리프</option><option value="serif">세리프 (Times 계열)</option></select>
+              <select class="fig-fmt" title="파일 형식"><option value="pdf">PDF (벡터)</option><option value="png">PNG 300dpi</option></select>
+            </div>
+            <div class="row"><span class="hint fig-data"></span><span class="grow"></span><select class="fig-load-sel" hidden></select><button class="btn sm fig-load" type="button" title="프로젝트에 저장된 그림 코드(.py)를 불러와 다시 그립니다">코드 불러오기</button><button class="btn sm fig-stop" type="button" hidden>중지</button><button class="btn primary fig-gen" type="button">코드 생성 · 그리기</button></div>
+            <div class="hint fig-status" aria-live="polite"></div>
+            <div class="fig-work" hidden>
+              <div class="fig-preview"><img class="fig-img" alt="그림 미리보기" hidden></div>
+              <div class="safety fig-msgs" hidden></div>
+              <div class="row"><input class="search fig-fu" placeholder="AI로 고치기 — 예: 범례를 위로 / 흑백 인쇄용으로 / y축을 0부터 / 글자를 한국어로"><button class="btn sm fig-fu-go" type="button">고치기</button></div>
+              <details class="fig-code-box"><summary>Python 코드 <span class="hint">(직접 고친 뒤 실행 가능)</span></summary>
+                <textarea class="fig-code" rows="14" spellcheck="false" autocomplete="off"></textarea>
+                <div class="row"><span class="grow"></span><button class="btn sm fig-copy-code" type="button">복사</button><button class="btn sm fig-run" type="button">실행</button></div>
+              </details>
+              <div class="fig-insert">
+                <label>파일 <input class="search fig-path" value="figures/figure.pdf" spellcheck="false"></label>
+                <label>캡션 <input class="search fig-caption" placeholder="그림 설명"></label>
+                <label>라벨 <input class="search fig-label" placeholder="fig:name" spellcheck="false"></label>
+                <div class="row"><label class="hint"><input type="checkbox" class="fig-save-code" checked> 코드도 프로젝트에 저장 (.py)</label><span class="grow"></span><button class="btn sm fig-dl" type="button">다운로드</button><button class="btn sm fig-copy-tex" type="button">LaTeX 복사</button><button class="btn primary fig-insert-btn" type="button">프로젝트에 넣기</button></div>
+              </div>
+            </div>
+          </div>
           <div class="custom">
             <div class="row">
               <button class="seg on" type="button" data-mode="edit" title="선택 영역을 고치거나, 커서 위치에 새로 씁니다">수정·작성</button>
@@ -235,7 +264,12 @@
     agentView: $('.agent-view'), agentLog: $('.agent-log'), agentProps: $('.agent-props'), agentText: $('.agent-text'),
     agentSend: $('.agent-send'), agentStop: $('.agent-stop'), agentNew: $('.agent-new'), agentWeb: $('.agent-web'),
     agentStatus: $('.agent-status'), agentMeta: $('.agent-meta'), customBox: $('.custom'),
-    followup: $('.followup'), fuText: $('.fu-text'), fuGo: $('.fu-go'), usage: $('.usage'), pkgPrompt: $('.pkg-prompt'), pkgMsg: $('.pkg-msg'), pkgAdd: $('.pkg-add'),
+    followup: $('.followup'), fuText: $('.fu-text'), fuGo: $('.fu-go'), usage: $('.usage'),
+    figView: $('.fig-view'), figEnv: $('.fig-env'), figTpls: $('.fig-tpls'), figDesc: $('.fig-desc'), figSize: $('.fig-size'), figFont: $('.fig-font'),
+    figFmt: $('.fig-fmt'), figData: $('.fig-data'), figLoad: $('.fig-load'), figLoadSel: $('.fig-load-sel'), figStop: $('.fig-stop'), figGen: $('.fig-gen'),
+    figStatus: $('.fig-status'), figWork: $('.fig-work'), figImg: $('.fig-img'), figMsgs: $('.fig-msgs'), figFu: $('.fig-fu'), figFuGo: $('.fig-fu-go'),
+    figCodeBox: $('.fig-code-box'), figCode: $('.fig-code'), figCopyCode: $('.fig-copy-code'), figRun: $('.fig-run'), figPath: $('.fig-path'),
+    figCaption: $('.fig-caption'), figLabel: $('.fig-label'), figSaveCode: $('.fig-save-code'), figDl: $('.fig-dl'), figCopyTex: $('.fig-copy-tex'), figInsertBtn: $('.fig-insert-btn'), pkgPrompt: $('.pkg-prompt'), pkgMsg: $('.pkg-msg'), pkgAdd: $('.pkg-add'),
     pkgCopy: $('.pkg-copy'), pkgDismiss: $('.pkg-dismiss'), acMode: $('.ac-mode'), safety: $('.safety'),
   };
   ui.body.style.position = 'relative';
@@ -361,7 +395,7 @@
     renderCats();
     renderActions();
     renderBibView();
-    if (currentCat === 'agent' && window.innerWidth >= 1100 && !ui.panel.classList.contains('wide')) { ui.panel.classList.add('wide'); ui.wideBtn.setAttribute('aria-pressed', 'true'); }
+    if ((currentCat === 'agent' || currentCat === 'figure') && window.innerWidth >= 1100 && !ui.panel.classList.contains('wide')) { ui.panel.classList.add('wide'); ui.wideBtn.setAttribute('aria-pressed', 'true'); }
     if (currentCat === 'check' && !lintDoc) lintTick(true);
   });
   ui.search.addEventListener('input', () => {
@@ -412,10 +446,13 @@
     ui.lintView.hidden = !(currentCat === 'check' && !q);
     ui.bibView.hidden = !(currentCat === 'refs' && !q && bibState.mode);
     const agentTab = currentCat === 'agent' && !q;
+    const figTab = currentCat === 'figure' && !q;
     ui.agentView.hidden = !agentTab;
-    ui.actions.hidden = agentTab;
-    ui.customBox.hidden = agentTab;
+    ui.figView.hidden = !figTab;
+    ui.actions.hidden = agentTab || figTab;
+    ui.customBox.hidden = agentTab || figTab;
     if (agentTab) { ui.result.hidden = true; renderAgent(); }
+    if (figTab) { ui.result.hidden = true; renderFig(); renderFigDataHint(); }
     for (const b of ui.actions.querySelectorAll('.chip')) {
       const a = allActions().find((x) => x.id === b.dataset.id);
       if (a && ['lint', 'terms', 'packages', 'stats'].includes(a.kind)) b.classList.toggle('on', !ui.lintView.hidden && a.kind === checkMode);
@@ -779,6 +816,7 @@
       }
       cliInfo = resp;
       renderModelBar();
+      renderFig();
       const name = backendNow();
       const cli = resp[name];
       const want = chrome.runtime.getManifest().version;
@@ -882,6 +920,14 @@
     WORKDIR_FAILED: '로컬 브리지의 작업 폴더를 만들 수 없습니다.',
     HOST_EXCEPTION: '로컬 브리지에서 예외가 발생했습니다.',
     BRIDGE_MISSING: '페이지 연결이 준비되지 않았습니다. 페이지를 새로고침하세요.',
+    PYTHON_NOT_FOUND: 'Python 을 찾지 못했습니다. ./scripts/install-host.sh --with-matplotlib 를 실행하세요.',
+    NO_MATPLOTLIB: 'Python 에 matplotlib 이 없습니다. ./scripts/install-host.sh --with-matplotlib 를 실행하세요.',
+    PY_ERROR: '코드 실행 중 오류가 났습니다.',
+    NO_FIGURE: '코드가 그림을 만들지 않았습니다.',
+    PY_CRASHED: 'Python 이 비정상 종료했습니다.',
+    TOO_LARGE: '그림 파일이 너무 큽니다 (12 MB 초과). PNG 대신 PDF 를 쓰거나 점 개수를 줄이세요.',
+    SPAWN_FAILED: '프로그램을 실행하지 못했습니다.',
+    BAD_REQUEST: '잘못된 요청입니다.',
   };
 
   function explain(code, detail = '') {
@@ -2259,6 +2305,401 @@
     renderAgent(); saveAgent();
   });
 
+  // ------------------------------------------------------------- figures ---
+  // AI writes matplotlib code → the bridge runs it (sandboxed) → preview → upload to the project
+  // (figures/<name>.pdf + optional .py) and insert a figure environment at the cursor.
+
+  const fig = {
+    busy: false, port: null, template: '', desc: '', data: '', dataFile: '', title: '',
+    code: '', meta: { caption: '', label: '', example: false }, unmatched: [],
+    preview: '', file: '', format: 'pdf', result: null, error: null, inserted: null, autoFix: 0, ranCode: '',
+    touched: { caption: false, label: false, path: false }, pkg: null, status: '',
+  };
+  const FIG_MIME = { pdf: 'application/pdf', png: 'image/png' };
+  const pyInfo = () => (cliInfo && cliInfo.python) || null;
+  const figReady = () => { const p = pyInfo(); return !!(p && p.ok && p.pkgs && p.pkgs.matplotlib); };
+
+  function figStatus(text) { fig.status = text; ui.figStatus.textContent = text; }
+
+  function renderFig() {
+    if (ui.figView.hidden) return;
+    const py = pyInfo();
+    let env = cliInfo ? '' : '로컬 브리지 확인 중…';
+    if (cliInfo && !hostHas('figure')) env = '<span class="warn">로컬 브리지를 업데이트해야 합니다 (<code>./scripts/install-host.sh</code>)</span>';
+    else if (cliInfo && (!py || !py.ok)) env = `<span class="warn">Python 을 찾지 못했습니다${py && py.error ? ` (${esc(py.error)})` : ''}. <code>./scripts/install-host.sh --with-matplotlib</code> 로 브리지 전용 Python 환경을 만들 수 있습니다.</span>`;
+    else if (cliInfo && !figReady()) env = `<span class="warn">Python ${esc(py.version)} 에 matplotlib 이 없습니다. <code>./scripts/install-host.sh --with-matplotlib</code> 를 실행하세요.</span>`;
+    else if (py) env = `Python ${esc(py.version)} · matplotlib ${esc(py.pkgs.matplotlib)}${py.pkgs.numpy ? ` · numpy ${esc(py.pkgs.numpy)}` : ''} · ${py.sandbox ? `<span class="ok">샌드박스(${py.sandbox === 'macos' ? 'macOS' : 'bubblewrap'})에서 실행</span>` : '<span class="warn">샌드박스 없음 — 코드를 읽고 직접 실행</span>'}`;
+    ui.figEnv.innerHTML = env;
+    ui.figTpls.innerHTML = F.TEMPLATES.map((t) => `<button type="button" class="chip${fig.template === t.id ? ' on' : ''}" data-tpl="${t.id}" title="${esc(t.prompt)}">${esc(t.label)}</button>`).join('');
+    if (!ui.figSize.options.length) {
+      ui.figSize.innerHTML = Object.entries(F.SIZES).map(([k, z]) => `<option value="${k}">${esc(z.label)}</option>`).join('');
+      ui.figSize.value = F.defaultSize(profile);
+    }
+    ui.figGen.disabled = fig.busy;
+    ui.figStop.hidden = !fig.busy;
+    ui.figRun.disabled = fig.busy || !ui.figCode.value.trim();
+    ui.figFuGo.disabled = fig.busy || !fig.code;
+    ui.figInsertBtn.disabled = fig.busy || !fig.file;
+    ui.figDl.disabled = !fig.file;
+    ui.figCopyTex.disabled = !fig.code;
+    ui.figWork.hidden = !fig.code && !fig.error;
+    ui.figStatus.textContent = fig.status;
+    if (fig.preview) { ui.figImg.src = `data:image/png;base64,${fig.preview}`; ui.figImg.hidden = false; } else { ui.figImg.removeAttribute('src'); ui.figImg.hidden = true; }
+    const msgs = [];
+    if (fig.meta.example) msgs.push('<li class="warn">예시 데이터로 그렸습니다 — 실제 결과로 바꾸기 전에는 논문에 쓰지 마세요.</li>');
+    if (fig.unmatched.length) msgs.push(`<li class="warn">선택한 데이터에 없는 숫자가 코드에 있습니다: ${esc(fig.unmatched.join(', '))} — 확인하세요.</li>`);
+    for (const w of (fig.result && fig.result.warnings) || []) msgs.push(`<li class="info">${esc(w)}</li>`);
+    if (fig.result) msgs.push(`<li class="info">${esc((fig.result.size || []).join(' × '))} in · ${Math.max(1, Math.round(fig.result.bytes / 1024))} KB ${esc(fig.result.format.toUpperCase())}${fig.result.sandbox ? '' : ' · 샌드박스 없이 실행됨'}</li>`);
+    if (fig.error) msgs.push(`<li class="error">${esc(fig.error.text)}${fig.error.detail ? `<pre>${esc(fig.error.detail)}</pre>` : ''}${fig.error.fixable && !fig.busy ? '<button class="btn sm fig-fix" type="button">AI로 오류 고치기</button>' : ''}</li>`);
+    if (fig.pkg && fig.pkg.missing.length) {
+      const names = fig.pkg.missing.map((x) => x.name).join(', ');
+      msgs.push(fig.pkg.hasPreamble
+        ? `<li class="warn">프리앰블에 <b>${esc(names)}</b> 패키지가 없습니다. <button class="btn sm fig-pkg-add" type="button">추가</button></li>`
+        : `<li class="warn">메인 파일 프리앰블에 추가하세요: <code>${esc(K.preambleLines(fig.pkg.missing).join('  '))}</code></li>`);
+    }
+    ui.figMsgs.innerHTML = msgs.length ? `<ul>${msgs.join('')}</ul>` : '';
+    ui.figMsgs.hidden = !msgs.length;
+    const p = F.parsePath(ui.figPath.value);
+    ui.figInsertBtn.textContent = fig.inserted && p && fig.inserted.path === p.path ? '프로젝트 파일 갱신' : '프로젝트에 넣기';
+  }
+
+  async function figSelection() {
+    try {
+      const c = await mw('getContext');
+      return { text: c.to > c.from ? c.doc.slice(c.from, c.to) : '', file: c.fileName || '', doc: c.doc || '' };
+    } catch { return { text: '', file: '', doc: '' }; }
+  }
+
+  async function renderFigDataHint() {
+    const s = await figSelection();
+    ui.figData.textContent = s.text.trim() ? `선택한 ${s.text.length.toLocaleString()}자를 데이터로 사용` : '선택 없음 → 예시 데이터';
+  }
+
+  function figPort() {
+    const port = chrome.runtime.connect({ name: 'olai-run' });
+    fig.port = port;
+    port.onDisconnect.addListener(() => {
+      if (fig.port !== port) return;
+      fig.port = null;
+      if (fig.busy) { fig.busy = false; fig.error = { text: explain('NATIVE_DISCONNECTED') }; figStatus('실패'); renderFig(); }
+    });
+    return port;
+  }
+  function figEnd(port) { if (fig.port === port) fig.port = null; try { port.disconnect(); } catch { /* closed */ } }
+
+  function figStop() {
+    const port = fig.port;
+    fig.port = null;
+    if (port) { try { port.disconnect(); } catch { /* closed */ } }
+    fig.busy = false;
+    figStatus('중지했습니다');
+    renderFig();
+  }
+
+  function figRequest(opts) {
+    const s = settings;
+    const isClaude = backendNow() !== 'codex';
+    const backend = isClaude ? 'claude' : 'codex';
+    const model = ((isClaude ? s.claudeModel : s.codexModel) || '').trim();
+    const effort = C.resolveEffort(backend, model, isClaude ? s.claudeEffort : s.codexEffort, 'medium', s);
+    const { system, prompt } = F.buildFigureRequest({ ...opts, python: pyInfo(), profileText: P.profileText(profile, C) });
+    return { backend, model, effort, web: false, timeoutSec: Math.min(Number(s.timeoutSec) || 300, 900), system, prompt };
+  }
+
+  async function figGenerate({ feedback = '', error = '' } = {}) {
+    if (fig.busy && !error) return;
+    if (!alive()) { toast(explain('EXTENSION_RELOADED')); return; }
+    if (cliInfo && !hostHas('figure')) { toast('로컬 브리지를 업데이트해야 합니다 (./scripts/install-host.sh)'); return; }
+    const revising = !!(feedback || error);
+    if (!revising) {
+      const sel = await figSelection();
+      fig.data = sel.text.trim() ? sel.text : '';
+      fig.dataFile = sel.file;
+      fig.title = (/\\title\s*(?:\[[^\]]*\])?\{([^{}]*)\}/.exec(sel.doc) || [])[1] || '';
+      fig.desc = ui.figDesc.value.trim();
+      if (!fig.desc && !fig.template && !fig.data) { toast('예시 디자인을 고르거나, 그릴 내용을 쓰거나, 에디터에서 데이터를 선택하세요'); return; }
+      fig.inserted = null;
+      fig.autoFix = 1;
+      fig.preview = '';
+      fig.file = '';
+      fig.result = null;
+      fig.pkg = null;
+      fig.touched = { caption: false, label: false, path: false };
+      ui.figData.textContent = fig.data ? `선택한 ${fig.data.length.toLocaleString()}자를 데이터로 사용` : '선택 없음 → 예시 데이터';
+    }
+    const request = figRequest({
+      description: fig.desc, template: fig.template, data: fig.data, dataFile: fig.dataFile, size: ui.figSize.value,
+      paperTitle: fig.title, previousCode: revising ? ui.figCode.value : '', feedback, error,
+    });
+    fig.busy = true;
+    fig.error = null;
+    figStatus(`${backendLabel(request)} · ${error ? '오류 고치는 중' : feedback ? '고치는 중' : '코드 작성 중'}…`);
+    renderFig();
+    let streamed = '';
+    let final = null;
+    let port;
+    try { port = figPort(); } catch { fig.busy = false; fig.error = { text: explain('EXTENSION_RELOADED') }; renderFig(); return; }
+    port.onMessage.addListener((m) => {
+      if (fig.port !== port || !m) return;
+      if (m.type === 'delta') { streamed += m.text; figStatus(`코드 작성 중… ${streamed.length.toLocaleString()}자`); }
+      else if (m.type === 'reset') streamed = '';
+      else if (m.type === 'final-chunk') final = (final || '') + m.text;
+      else if (m.type === 'done') {
+        figEnd(port);
+        recordUsage(m.costUsd);
+        const code = F.extractCode(final ?? streamed);
+        if (!code.trim() || !/plt|matplotlib|Figure/.test(code)) {
+          fig.busy = false;
+          fig.error = { text: 'AI 응답에서 그림 코드를 찾지 못했습니다. 설명을 조금 더 구체적으로 써 보세요.', detail: String(final ?? streamed).slice(0, 800) };
+          figStatus('실패');
+          renderFig();
+          return;
+        }
+        figAcceptCode(code);
+      } else if (m.type === 'error') {
+        figEnd(port);
+        fig.busy = false;
+        fig.error = { text: explain(m.error, m.detail), detail: m.detail ? String(m.detail).slice(0, 1200) : '' };
+        figStatus('실패');
+        renderFig();
+      }
+    });
+    port.postMessage({ type: 'run', request });
+  }
+
+  function figAcceptCode(code) {
+    ui.figCode.value = code;
+    fig.code = code;
+    fig.meta = F.parseMeta(code);
+    if (fig.meta.caption && !fig.touched.caption) ui.figCaption.value = fig.meta.caption;
+    if (fig.meta.label && !fig.touched.label) ui.figLabel.value = fig.meta.label;
+    if (!fig.inserted && !fig.touched.path) ui.figPath.value = `figures/${F.safeName(fig.meta.label || fig.template || 'figure')}.${ui.figFmt.value}`;
+    fig.busy = false;
+    if (pyInfo() && pyInfo().sandbox && figReady()) { figRun(); return; }
+    fig.unmatched = F.unmatchedNumbers(code, fig.data);
+    figStatus(figReady() ? '샌드박스가 없어 자동 실행하지 않았습니다 — 코드를 읽어 본 뒤 "실행"을 누르세요' : '코드를 만들었습니다 (Python·matplotlib 이 준비되면 실행할 수 있습니다)');
+    ui.figCodeBox.open = true;
+    renderFig();
+  }
+
+  // Re-run automatically (format/font change) only inside a sandbox, or for code that already ran.
+  const figCanRerun = () => !!(fig.code && !fig.busy && fig.file && ((pyInfo() && pyInfo().sandbox) || ui.figCode.value === fig.ranCode));
+
+  function figRun() {
+    const code = ui.figCode.value;
+    if (fig.busy || !code.trim()) return;
+    if (!alive()) { toast(explain('EXTENSION_RELOADED')); return; }
+    fig.busy = true;
+    fig.error = null;
+    fig.code = code;
+    fig.ranCode = code;
+    fig.meta = F.parseMeta(code);
+    fig.unmatched = F.unmatchedNumbers(code, fig.data);
+    figStatus('그림 그리는 중…');
+    renderFig();
+    const chunks = { figure: '', preview: '' };
+    let port;
+    try { port = figPort(); } catch { fig.busy = false; fig.error = { text: explain('EXTENSION_RELOADED') }; renderFig(); return; }
+    port.onMessage.addListener((m) => {
+      if (fig.port !== port || !m) return;
+      if (m.type === 'status') figStatus(m.text);
+      else if (m.type === 'py-file' && (m.which === 'figure' || m.which === 'preview')) chunks[m.which] += m.data;
+      else if (m.type === 'done') {
+        figEnd(port);
+        fig.busy = false;
+        fig.preview = chunks.preview;
+        fig.file = chunks.figure;
+        fig.format = (m.figure && m.figure.format) || ui.figFmt.value;
+        fig.result = { ...(m.figure || {}), format: fig.format };
+        const p = F.parsePath(ui.figPath.value);
+        if (p && p.ext !== fig.format) ui.figPath.value = `${p.folder}/${p.base}.${fig.format}`;
+        figStatus(`그렸습니다 · ${((m.durationMs || 0) / 1000).toFixed(1)}초`);
+        renderFig();
+      } else if (m.type === 'error' || m.type === 'cancelled') {
+        figEnd(port);
+        fig.busy = false;
+        if (m.type === 'cancelled') { figStatus('중지했습니다'); renderFig(); return; }
+        const fixable = ['PY_ERROR', 'NO_FIGURE', 'PY_CRASHED'].includes(m.error);
+        fig.error = { text: `${explain(m.error, m.detail)}${m.line ? ` (코드 ${m.line}번째 줄)` : ''}`, detail: String(m.detail || '').slice(-2500), fixable };
+        if (fixable && fig.autoFix > 0) {
+          fig.autoFix -= 1;
+          renderFig();
+          figGenerate({ error: `${m.error}${m.line ? ` at line ${m.line}` : ''}:\n${m.detail || ''}` });
+          return;
+        }
+        figStatus('실패');
+        renderFig();
+      }
+    });
+    port.postMessage({ type: 'pyrun', request: { code, format: ui.figFmt.value, font: ui.figFont.value, dpi: 300, timeoutSec: 90 } });
+  }
+
+  // ---- upload into the Overleaf project (same endpoints as Overleaf's own "Upload" / "New folder")
+
+  const csrfToken = () => (document.querySelector('meta[name="ol-csrfToken"]') || {}).content || '';
+  async function olFetch(url, opts = {}) {
+    const res = await fetch(url, { credentials: 'same-origin', ...opts, headers: { 'X-Csrf-Token': csrfToken(), Accept: 'application/json', ...(opts.headers || {}) } });
+    let j = null;
+    try { j = await res.json(); } catch { /* not json */ }
+    if (!res.ok || (j && j.success === false)) throw new Error((j && (j.error || j.message)) || `HTTP ${res.status}`);
+    return j;
+  }
+  async function projectFolderId(name) {
+    let docs = [];
+    try { docs = await mw('listDocs'); } catch { docs = []; }
+    const hit = docs.find((d) => d.type === 'folder' && (d.path || d.name) === name);
+    if (hit) return hit.id;
+    const j = await olFetch(`/project/${encodeURIComponent(PROJECT_ID)}/folder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+    if (!j || !j._id) throw new Error('폴더를 만들지 못했습니다');
+    return j._id;
+  }
+  function uploadToFolder(folderId, name, blob) {
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('type', blob.type || 'application/octet-stream');
+    fd.append('qqfile', blob, name);
+    return olFetch(`/Project/${encodeURIComponent(PROJECT_ID)}/upload?folder_id=${encodeURIComponent(folderId)}`, { method: 'POST', body: fd });
+  }
+  async function projectPaths() {
+    try {
+      const j = await olFetch(`/project/${encodeURIComponent(PROJECT_ID)}/entities`);
+      return new Set(((j && j.entities) || []).map((e) => String(e.path || '').replace(/^\//, '')));
+    } catch { return null; }
+  }
+  function b64Blob(b64, type) {
+    const bin = atob(b64);
+    const u = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    return new Blob([u], { type });
+  }
+  const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  async function figInsert() {
+    if (fig.busy || !fig.file) return;
+    let p = F.parsePath(ui.figPath.value);
+    if (!p) { toast('파일 경로는 "폴더/이름.pdf" 형식이어야 합니다 (예: figures/accuracy.pdf)'); return; }
+    let ctx;
+    try { ctx = await mw('getContext'); } catch (e) { toast(explain(e.message)); return; }
+    fig.busy = true;
+    fig.error = null;
+    renderFig();
+    try {
+      const updating = !!(fig.inserted && fig.inserted.path === p.path);
+      if (!updating) {
+        const existing = await projectPaths();
+        const u = existing ? F.uniquePath(p.path, existing) : p.path;
+        if (u !== p.path) { ui.figPath.value = u; p = F.parsePath(u); toast(`같은 이름의 파일이 있어 ${u} 로 저장합니다`); }
+      }
+      figStatus('업로드 중…');
+      const folderId = await projectFolderId(p.folder);
+      await uploadToFolder(folderId, p.file, b64Blob(fig.file, FIG_MIME[fig.format]));
+      let codeNote = '';
+      if (ui.figSaveCode.checked) {
+        try { await uploadToFolder(folderId, `${p.base}.py`, new Blob([ui.figCode.value], { type: 'text/x-python' })); codeNote = ` + ${p.folder}/${p.base}.py`; } catch { codeNote = ' (코드 저장 실패)'; }
+      }
+      const noExt = p.path.replace(/\.(pdf|png)$/, '');
+      const already = new RegExp(`\\\\includegraphics\\s*(\\[[^\\]]*\\])?\\{(${reEsc(p.path)}|${reEsc(noExt)})\\}`).test(ctx.doc || '');
+      let inserted = false;
+      if (!already && isTexFile(ctx.fileName) && !ctx.readOnly) {
+        const latex = F.figureLatex({ path: p.path, caption: ui.figCaption.value.trim(), label: ui.figLabel.value.trim(), size: ui.figSize.value });
+        const at = F.safeInsertPos(ctx.doc, ctx.to > ctx.from ? ctx.to : ctx.head);
+        const plan = P.insertionPlan(latex, ctx.doc, at, 'paragraph');
+        await mw('insertAt', { edits: [plan], anchor: ctx.doc.slice(0, plan.pos), fileName: ctx.fileName });
+        inserted = true;
+        const res = K.analyze(ctx.doc, latex);
+        fig.pkg = res.missing.length ? { missing: res.missing, hasPreamble: res.hasPreamble } : null;
+      }
+      fig.inserted = { path: p.path };
+      figStatus(updating ? `${p.path} 갱신${codeNote} — 다시 컴파일하면 반영됩니다`
+        : inserted ? `${p.path}${codeNote} 업로드, 그림 삽입 완료 (${MOD}+Z 로 삽입 취소)`
+          : `${p.path}${codeNote} 업로드 완료${already ? ' (이미 본문에 있음)' : ' — "LaTeX 복사"로 본문에 넣으세요'}`);
+    } catch (e) {
+      figStatus('업로드 실패');
+      fig.error = { text: `프로젝트에 올리지 못했습니다 (${e.message}). "다운로드"한 파일을 Overleaf 에 직접 올리고 "LaTeX 복사"를 쓰세요.` };
+    } finally {
+      fig.busy = false;
+      renderFig();
+    }
+  }
+
+  function figDownload() {
+    if (!fig.file) return;
+    const p = F.parsePath(ui.figPath.value);
+    const a = document.createElement('a');
+    a.href = `data:${FIG_MIME[fig.format]};base64,${fig.file}`;
+    a.download = p ? p.file : `figure.${fig.format}`;
+    a.click();
+  }
+
+  async function figLoadList() {
+    let docs = [];
+    try { docs = await mw('listDocs'); } catch { docs = []; }
+    const py = docs.filter((d) => d.type === 'doc' && /\.py$/i.test(d.name));
+    if (!py.length) { toast('파일 트리에 보이는 .py 파일이 없습니다 (폴더를 펼친 뒤 다시 시도)'); return; }
+    ui.figLoadSel.innerHTML = `<option value="">불러올 코드 선택…</option>${py.map((d) => `<option value="${esc(d.id)}">${esc(d.path || d.name)}</option>`).join('')}`;
+    ui.figLoadSel.hidden = false;
+    ui.figLoadSel.focus();
+  }
+  ui.figLoadSel.addEventListener('change', async () => {
+    const id = ui.figLoadSel.value;
+    const label = ui.figLoadSel.selectedOptions[0] ? ui.figLoadSel.selectedOptions[0].textContent : '';
+    ui.figLoadSel.hidden = true;
+    if (!id) return;
+    let text;
+    try { text = await fetchProjectDoc(id); } catch (e) { toast(`읽지 못했습니다: ${e.message}`); return; }
+    const m = /^(?:(.*)\/)?([^/]+)\.py$/i.exec(label);
+    const folder = (m && m[1] && /^[A-Za-z0-9_-]+$/.test(m[1])) ? m[1] : 'figures';
+    const base = F.safeName(m ? m[2] : 'figure');
+    fig.data = '';
+    fig.template = '';
+    fig.result = null;
+    fig.preview = '';
+    fig.file = '';
+    fig.pkg = null;
+    fig.autoFix = 0;
+    fig.touched = { caption: false, label: false, path: true };
+    const existing = await projectPaths();
+    const pdf = `${folder}/${base}.${ui.figFmt.value}`;
+    ui.figPath.value = pdf;
+    fig.inserted = existing && existing.has(pdf) ? { path: pdf } : null;
+    figStatus(`${label} 를 불러왔습니다`);
+    figAcceptCode(text.endsWith('\n') ? text : `${text}\n`);
+  });
+
+  ui.figTpls.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tpl]');
+    if (!b) return;
+    fig.template = fig.template === b.dataset.tpl ? '' : b.dataset.tpl;
+    renderFig();
+  });
+  ui.figGen.addEventListener('click', (e) => { if (e.isTrusted) figGenerate(); });
+  ui.figDesc.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing && e.isTrusted) { e.preventDefault(); figGenerate(); } });
+  ui.figStop.addEventListener('click', figStop);
+  ui.figRun.addEventListener('click', (e) => { if (e.isTrusted) { fig.autoFix = 0; figRun(); } });
+  ui.figCode.addEventListener('input', () => { ui.figRun.disabled = fig.busy || !ui.figCode.value.trim(); });
+  const figFollowUp = () => { const t = ui.figFu.value.trim(); if (!t || fig.busy || !fig.code) return; ui.figFu.value = ''; fig.autoFix = 1; figGenerate({ feedback: t }); };
+  ui.figFuGo.addEventListener('click', (e) => { if (e.isTrusted) figFollowUp(); });
+  ui.figFu.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.isTrusted) { e.preventDefault(); figFollowUp(); } });
+  ui.figInsertBtn.addEventListener('click', (e) => { if (e.isTrusted) figInsert(); });
+  ui.figDl.addEventListener('click', figDownload);
+  ui.figCopyTex.addEventListener('click', () => {
+    const p = F.parsePath(ui.figPath.value);
+    copyText(F.figureLatex({ path: p ? p.path : ui.figPath.value, caption: ui.figCaption.value.trim(), label: ui.figLabel.value.trim(), size: ui.figSize.value }));
+  });
+  ui.figCopyCode.addEventListener('click', () => copyText(ui.figCode.value));
+  ui.figLoad.addEventListener('click', figLoadList);
+  ui.figFmt.addEventListener('change', () => {
+    const p = F.parsePath(ui.figPath.value);
+    if (p) ui.figPath.value = `${p.folder}/${p.base}.${ui.figFmt.value}`;
+    if (figCanRerun()) figRun();
+  });
+  ui.figFont.addEventListener('change', () => { if (figCanRerun()) figRun(); });
+  for (const [el, k] of [[ui.figCaption, 'caption'], [ui.figLabel, 'label'], [ui.figPath, 'path']]) el.addEventListener('input', () => { fig.touched[k] = true; renderFig(); });
+  ui.figMsgs.addEventListener('click', async (e) => {
+    if (e.target.closest('.fig-fix') && e.isTrusted) { fig.autoFix = 0; figGenerate({ error: fig.error ? `${fig.error.text}\n${fig.error.detail || ''}` : 'error' }); }
+    else if (e.target.closest('.fig-pkg-add') && e.isTrusted && fig.pkg) { if (await insertPackages(fig.pkg.missing)) { fig.pkg = null; renderFig(); } }
+  });
+
   // ------------------------------------------------------- follow-up/usage ---
 
   // "결과 다듬기": revise the shown result with a follow-up instruction, same target.
@@ -2449,6 +2890,18 @@
     else if (msg.command === 'quick-action') quickAction();
     else if (msg.command === 'action') {
       // Right-click menu on selected text.
+      if (msg.actionId === 'figure') {
+        openPanel();
+        currentCat = 'figure';
+        saveSetting('lastCategory', currentCat);
+        searchQuery = '';
+        ui.search.value = '';
+        renderCats();
+        renderActions();
+        if (window.innerWidth >= 1100 && !ui.panel.classList.contains('wide')) { ui.panel.classList.add('wide'); ui.wideBtn.setAttribute('aria-pressed', 'true'); }
+        ui.figDesc.focus();
+        return;
+      }
       if (msg.actionId === 'agent') {
         openPanel();
         currentCat = 'agent';

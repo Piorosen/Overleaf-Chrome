@@ -568,7 +568,11 @@
       const out = [];
       for (const el of document.querySelectorAll('[data-file-id][data-file-type]')) {
         const li = el.closest('li[role="treeitem"]');
-        out.push({ id: el.getAttribute('data-file-id'), type: el.getAttribute('data-file-type'), name: ((li && li.getAttribute('aria-label')) || el.textContent || '').trim() });
+        const name = ((li && li.getAttribute('aria-label')) || el.textContent || '').trim();
+        // Folder path from the enclosing tree items (top-level items have none).
+        const segs = [];
+        for (let p = li && li.parentElement ? li.parentElement.closest('li[role="treeitem"]') : null; p; p = p.parentElement ? p.parentElement.closest('li[role="treeitem"]') : null) segs.unshift((p.getAttribute('aria-label') || '').trim());
+        out.push({ id: el.getAttribute('data-file-id'), type: el.getAttribute('data-file-type'), name, path: [...segs, name].join('/') });
       }
       return out;
     },
