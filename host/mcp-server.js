@@ -64,7 +64,7 @@ rl.on('line', async (line) => {
   if (!m || typeof m !== 'object') return;
   const { id, method, params } = m;
   if (method === 'initialize') {
-    out({ jsonrpc: '2.0', id, result: { protocolVersion: (params && params.protocolVersion) || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'overleaf', version: '0.5.0' } } });
+    out({ jsonrpc: '2.0', id, result: { protocolVersion: (params && params.protocolVersion) || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'overleaf', version: '0.6.0' } } });
   } else if (method === 'tools/list') {
     out({ jsonrpc: '2.0', id, result: { tools: TOOLS } });
   } else if (method === 'tools/call') {

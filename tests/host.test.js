@@ -74,8 +74,10 @@ test('ping reports version, capabilities and both CLIs', async () => {
   const { msgs, code } = await talk({ type: 'ping' });
   assert.equal(code, 0);
   const pong = msgs.find((m) => m.type === 'pong');
-  assert.equal(pong.hostVersion, '0.5.0');
-  for (const cap of ['web-allowlist', 'bib', 'pgkill', 'agent']) assert.ok(pong.caps.includes(cap), cap);
+  assert.equal(pong.hostVersion, require('../package.json').version);
+  assert.equal(pong.hostVersion, require('../extension/manifest.json').version);
+  for (const cap of ['web-allowlist', 'bib', 'pgkill', 'agent', 'figure']) assert.ok(pong.caps.includes(cap), cap);
+  assert.equal(typeof pong.python, 'object');
   assert.equal(pong.claude.ok, true);
   assert.match(pong.claude.version, /Fake Claude/);
   assert.equal(typeof pong.claude.defaults, 'object');

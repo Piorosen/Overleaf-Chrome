@@ -36,16 +36,27 @@ Write-Host "• node   : $Node"
 Write-Host "• claude : $(if ($Claude) { $Claude } else { '(없음 — Claude 백엔드 사용 불가)' })"
 Write-Host "• codex  : $(if ($Codex) { $Codex } else { '(없음 — Codex 백엔드 사용 불가)' })"
 
-foreach ($f in 'host.js', 'mcp-server.js', 'agent-tools.js') { Copy-Item -Force (Join-Path $RepoDir "host\$f") $InstallDir }
+foreach ($f in 'host.js', 'mcp-server.js', 'agent-tools.js', 'pyfig.js') { Copy-Item -Force (Join-Path $RepoDir "host\$f") $InstallDir }
+
+# Python for the figure feature (no sandbox on Windows: the panel asks before running AI code).
+$Python = ''
+foreach ($c in @($env:OLAI_PYTHON, 'python', 'python3', 'py')) {
+  if (-not $c) { continue }
+  $cmd = Get-Command $c -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $cmd) { continue }
+  & $cmd.Source -c 'import matplotlib, numpy' 2>$null
+  if ($LASTEXITCODE -eq 0) { $Python = (& $cmd.Source -c 'import sys; print(sys.executable)').Trim(); break }
+}
+Write-Host "• python : $(if ($Python) { $Python } else { '(matplotlib 이 있는 Python 없음 — pip install matplotlib 후 다시 실행)' })"
 
 # config.json (written by node: UTF-8 without BOM; keys added by hand are preserved).
 & $Node -e @'
 const fs = require("fs");
-const [file, claudePath, codexPath, p] = process.argv.slice(1);
+const [file, claudePath, codexPath, p, pythonPath] = process.argv.slice(1);
 let prev = {};
 try { prev = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
-fs.writeFileSync(file, JSON.stringify({ ...prev, claudePath: claudePath || "claude", codexPath: codexPath || "codex", path: p, installedAt: new Date().toISOString() }, null, 2) + "\n");
-'@ (Join-Path $InstallDir 'config.json') "$Claude" "$Codex" "$UserPath"
+fs.writeFileSync(file, JSON.stringify({ ...prev, claudePath: claudePath || "claude", codexPath: codexPath || "codex", pythonPath: pythonPath || "python", path: p, installedAt: new Date().toISOString() }, null, 2) + "\n");
+'@ (Join-Path $InstallDir 'config.json') "$Claude" "$Codex" "$UserPath" "$Python"
 
 $Launcher = Join-Path $InstallDir 'run-host.bat'
 $bat = "@echo off`r`nchcp 65001 >nul`r`n`"$Node`" `"%~dp0host.js`" %*`r`n"

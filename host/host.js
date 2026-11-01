@@ -14,6 +14,9 @@
  *   { type: "run", backend: "claude"|"codex", system, prompt, model?, effort?, timeoutSec?, web? }
  *       web: Claude only — enables WebSearch plus WebFetch restricted to scholarly domains.
  *   { type: "bib", op: "arxiv"|"arxiv-search"|"s2"|"openalex-work"|"openalex-search"|"doi-bib"|"crossref-search", ... }
+ *   { type: "pyrun", code, format: "pdf"|"png", font?: "sans"|"serif", dpi?, timeoutSec? }
+ *       Runs AI-written matplotlib code (see pyfig.js: sandboxed on macOS/Linux) and returns the figure
+ *       as { type: "py-file", which: "figure"|"preview", data (base64 chunk), last } messages + "done".
  *   { type: "agent", projectKey, sessionId?, newSession?, system, prompt, model?, effort?, web?, timeoutSec?, maxToolCalls? }
  *       Agent mode (Claude only): Claude Code runs a multi-step loop whose ONLY tools are the Overleaf
  *       tools served by mcp-server.js (+ optional web search). Each tool call is relayed to the
@@ -26,7 +29,7 @@
  *   { type: "reset" }                          a new assistant message started (drop streamed text)
  *   { type: "delta", text }                    streamed text (claude only)
  *   { type: "final-chunk", text }              authoritative final text, chunked
- *   { type: "done", durationMs, costUsd? }     run finished successfully
+ *   { type: "done", durationMs, costUsd?, figure? }  run finished successfully
  *   { type: "bib-result", ok, data?, error? }  reply to a bib request
  *   { type: "session", sessionId }             agent conversation id (to resume next turn)
  *   { type: "activity", name, input }          agent tool use (for the activity log)
@@ -51,8 +54,9 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 
-const HOST_VERSION = '0.5.0';
-const CAPS = ['web', 'web-allowlist', 'bib', 'pgkill', 'sysprompt-file', 'reset', 'agent'];
+const HOST_VERSION = '0.6.0';
+const CAPS = ['web', 'web-allowlist', 'bib', 'pgkill', 'sysprompt-file', 'reset', 'agent', 'figure'];
+const PYFIG = require('./pyfig.js');
 let AGENT_TOOLS = [];
 try { AGENT_TOOLS = require('./agent-tools.js').TOOLS.map((t) => t.name); } catch { /* agent mode unavailable */ }
 const IS_WIN = process.platform === 'win32';
@@ -209,6 +213,7 @@ async function handle(msg) {
   }
   if (msg.type === 'run') return run(msg);
   if (msg.type === 'agent') return agentRun(msg);
+  if (msg.type === 'pyrun') return pyRun(msg);
   if (msg.type === 'tool-result') {
     const w = toolWaiters.get(msg.callId);
     if (w) { toolWaiters.delete(msg.callId); w({ ok: !!msg.ok, result: msg.result, error: msg.error }); }
@@ -266,13 +271,100 @@ function cliDefaults() {
 }
 
 async function ping() {
-  const [claude, codex] = await Promise.all([versionOf('claude'), versionOf('codex')]);
+  const [claude, codex, py] = await Promise.all([versionOf('claude'), versionOf('codex'), PYFIG.probePython(pythonPath(), process.env)]);
   const defaults = cliDefaults();
   return {
     type: 'pong', hostVersion: HOST_VERSION, caps: CAPS, node: process.version, platform: process.platform,
     claude: { ...claude, defaults: defaults.claude },
     codex: { ...codex, defaults: defaults.codex },
+    python: py.ok
+      ? { ok: true, path: py.path, version: py.version, pkgs: py.pkgs, sandbox: PYFIG.sandboxKind(CONFIG, process.env.PATH) }
+      : { ok: false, path: py.path, error: py.error },
   };
+}
+
+function pythonPath() {
+  return typeof CONFIG.pythonPath === 'string' && CONFIG.pythonPath ? CONFIG.pythonPath : IS_WIN ? 'python' : 'python3';
+}
+
+// ----------------------------------------------------------- figures -----
+
+const MAX_FIGURE_BYTES = 12 * 1024 * 1024;
+
+function sendFile(which, buf) {
+  const b64 = buf.toString('base64');
+  const step = 192 * 1024;
+  for (let i = 0; i < b64.length || i === 0; i += step) send({ type: 'py-file', which, data: b64.slice(i, i + step), last: i + step >= b64.length });
+}
+
+async function pyRun(req) {
+  if (child) return send({ type: 'error', error: 'BUSY' });
+  const code = typeof req.code === 'string' ? req.code : '';
+  if (!code.trim() || code.length > 200000) return send({ type: 'error', error: 'BAD_REQUEST', detail: 'code' });
+  const format = req.format === 'png' ? 'png' : 'pdf';
+  const font = req.font === 'serif' ? 'serif' : 'sans';
+  const dpi = Math.min(Math.max(Number(req.dpi) || 300, 72), 600);
+  const timeoutSec = Math.min(Math.max(Number(req.timeoutSec) || 90, 5), 300);
+  inFlight += 1;
+  let runDir = null;
+  const started = Date.now();
+  const end = (msg) => { send(msg); removeDir(runDir); inFlight -= 1; maybeExit(); };
+  try {
+    send({ type: 'status', text: 'Python 확인 중…' });
+    const py = await PYFIG.probePython(pythonPath(), process.env);
+    if (!py.ok) return end({ type: 'error', error: 'PYTHON_NOT_FOUND', detail: py.error });
+    if (!py.pkgs || !py.pkgs.matplotlib) return end({ type: 'error', error: 'NO_MATPLOTLIB', detail: `${py.executable} (Python ${py.version})` });
+    if (stdinEnded) return end({ type: 'cancelled' });
+    runDir = makeRunDir();
+    const mplDir = path.join(privateBaseDir(), 'mplconfig');
+    fs.mkdirSync(mplDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(runDir, 'runner.py'), PYFIG.RUNNER_PY, { mode: 0o600 });
+    fs.writeFileSync(path.join(runDir, 'figure_code.py'), code, { mode: 0o600 });
+    const sandbox = PYFIG.sandboxKind(CONFIG, process.env.PATH);
+    const cmd = PYFIG.buildCommand({ py, runDir, mplDir, sandbox, format, font, dpi, baseEnv: process.env });
+    send({ type: 'status', text: sandbox ? '그림 그리는 중… (샌드박스)' : '그림 그리는 중…' });
+    let proc;
+    try {
+      proc = spawn(cmd.bin, cmd.args, { cwd: runDir, stdio: ['ignore', 'pipe', 'pipe'], env: cmd.env, detached: !IS_WIN });
+    } catch (e) {
+      return end({ type: 'error', error: 'SPAWN_FAILED', detail: `${cmd.bin}: ${e.message}` });
+    }
+    child = proc;
+    let log = '';
+    proc.stdout.on('data', (d) => { log = (log + d).slice(-6000); });
+    proc.stderr.on('data', (d) => { log = (log + d).slice(-6000); });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree('SIGTERM');
+      setTimeout(() => { if (child === proc) killTree('SIGKILL'); }, KILL_GRACE_MS);
+    }, timeoutSec * 1000);
+    const exit = await new Promise((resolve) => {
+      proc.on('error', (e) => resolve({ error: e }));
+      proc.on('close', (codeNum, signal) => resolve({ code: codeNum, signal }));
+    });
+    clearTimeout(timer);
+    if (child === proc) child = null;
+    if (exit.error) return end({ type: 'error', error: exit.error.code === 'ENOENT' ? 'PYTHON_NOT_FOUND' : 'SPAWN_FAILED', detail: `${cmd.bin}: ${exit.error.message}` });
+    if (timedOut) return end({ type: 'error', error: 'TIMEOUT', detail: `${timeoutSec}초 안에 그림이 완성되지 않아 중단했습니다.` });
+    if (stdinEnded) return end({ type: 'cancelled' });
+    let res = null;
+    try { res = JSON.parse(fs.readFileSync(path.join(runDir, 'result.json'), 'utf8')); } catch { /* crashed */ }
+    if (!res) return end({ type: 'error', error: 'PY_CRASHED', detail: (log || `exit ${exit.code} ${exit.signal || ''}`).slice(-3000) });
+    if (!res.ok) return end({ type: 'error', error: res.error || 'PY_ERROR', detail: res.detail || '', line: res.line || null, log: log.slice(-2000) });
+    const fig = fs.readFileSync(path.join(runDir, `figure.${format}`));
+    const prev = fs.readFileSync(path.join(runDir, 'preview.png'));
+    if (fig.length > MAX_FIGURE_BYTES || prev.length > MAX_FIGURE_BYTES) return end({ type: 'error', error: 'TOO_LARGE', detail: `${Math.round(fig.length / 1024)} KB` });
+    sendFile('preview', prev);
+    sendFile('figure', fig);
+    return end({
+      type: 'done', durationMs: Date.now() - started,
+      figure: { format, bytes: fig.length, size: res.size, figures: res.figures, font: res.font, cjkFont: res.cjkFont, warnings: res.warnings || [], sandbox: cmd.sandbox, log: log.slice(-2000) },
+    });
+  } catch (e) {
+    if (child) { killTree('SIGKILL'); child = null; }
+    return end({ type: 'error', error: 'HOST_EXCEPTION', detail: String(e && e.stack || e) });
+  }
 }
 
 const SAFE_ARG = /^[\w.:\/\[\]@=-]{1,100}$/;

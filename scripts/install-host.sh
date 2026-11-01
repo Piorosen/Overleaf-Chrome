@@ -1,15 +1,26 @@
 #!/usr/bin/env bash
 # Overleaf AI — install the Native Messaging host for Chrome (and other Chromium browsers).
 #
-#   ./scripts/install-host.sh [EXTENSION_ID]
+#   ./scripts/install-host.sh [--with-matplotlib] [EXTENSION_ID]
 #
 # EXTENSION_ID defaults to the fixed ID derived from the "key" in extension/manifest.json.
-# Re-run this script after updating host/host.js or after installing/moving the claude/codex CLI.
+# --with-matplotlib: if no Python with matplotlib is found, create a private virtualenv for the
+#   figure feature in the install directory and install matplotlib + numpy into it (downloads ~40 MB).
+# OLAI_PYTHON=/path/to/python overrides the Python used for figures.
+# Re-run this script after updating host/*.js or after installing/moving the claude/codex CLI or Python.
 set -euo pipefail
 
 HOST_NAME="com.olai.cli_bridge"
 DEFAULT_EXT_ID="lbggnmchbhbpojfdpcfknoppbjpnmgnn"
-EXT_ID="${1:-$DEFAULT_EXT_ID}"
+EXT_ID="$DEFAULT_EXT_ID"
+WITH_MPL=0
+for arg in "$@"; do
+  case "$arg" in
+    --with-matplotlib) WITH_MPL=1 ;;
+    -*) echo "✗ 알 수 없는 옵션: $arg" >&2; exit 1 ;;
+    *) EXT_ID="$arg" ;;
+  esac
+done
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OS="$(uname -s)"
@@ -67,23 +78,61 @@ if [[ -z "$CLAUDE_BIN" && -z "$CODEX_BIN" ]]; then
 fi
 
 mkdir -p "$INSTALL_DIR"
-cp "$REPO_DIR/host/host.js" "$REPO_DIR/host/mcp-server.js" "$REPO_DIR/host/agent-tools.js" "$INSTALL_DIR/"
+cp "$REPO_DIR/host/host.js" "$REPO_DIR/host/mcp-server.js" "$REPO_DIR/host/agent-tools.js" "$REPO_DIR/host/pyfig.js" "$INSTALL_DIR/"
+
+# Python for the figure feature: the first one that can import matplotlib (or a private venv).
+has_mpl() { (PATH="$USER_PATH"; perl -e 'alarm 30; exec @ARGV' "$1" -c 'import matplotlib, numpy' >/dev/null 2>&1); }
+PY_BIN=""
+PY_ANY=""
+VENV="$INSTALL_DIR/pyenv"
+if [[ -n "${OLAI_PYTHON:-}" ]]; then
+  PY_BIN="$OLAI_PYTHON"
+elif [[ -x "$VENV/bin/python" ]] && has_mpl "$VENV/bin/python"; then
+  PY_BIN="$VENV/bin/python"
+else
+  for c in python3 python3.14 python3.13 python3.12 python3.11 python3.10 python3.9 /usr/bin/python3 \
+           "$HOME/miniforge3/bin/python" "$HOME/miniconda3/bin/python" "$HOME/anaconda3/bin/python"; do
+    if [[ "$c" == /* ]]; then [[ -x "$c" ]] && b="$c" || b=""; else b="$(find_bin "$c")"; fi
+    [[ -n "$b" ]] || continue
+    if has_mpl "$b"; then PY_BIN="$b"; break; fi
+    if [[ -z "$PY_ANY" ]] && (PATH="$USER_PATH"; "$b" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null); then PY_ANY="$b"; fi
+  done
+fi
+if [[ -z "$PY_BIN" && "$WITH_MPL" -eq 1 ]]; then
+  if [[ -n "$PY_ANY" ]]; then
+    echo "• 그림 기능용 Python 환경을 만듭니다: $VENV (matplotlib, numpy 설치 중…)"
+    if (PATH="$USER_PATH"; "$PY_ANY" -m venv "$VENV" && "$VENV/bin/python" -m pip install --quiet --disable-pip-version-check matplotlib numpy); then
+      PY_BIN="$VENV/bin/python"
+    else
+      echo "⚠ matplotlib 설치에 실패했습니다. 네트워크를 확인하거나 직접 설치하세요." >&2
+    fi
+  else
+    echo "⚠ Python 3.9+ 를 찾지 못해 그림 기능 환경을 만들 수 없습니다." >&2
+  fi
+fi
+if [[ -n "$PY_BIN" ]]; then
+  echo "• python : $PY_BIN ($(PATH="$USER_PATH" "$PY_BIN" -c 'import sys, matplotlib; print(sys.version.split()[0], "· matplotlib", matplotlib.__version__)' 2>/dev/null || echo '?'))"
+else
+  PY_BIN="${PY_ANY:-python3}"
+  echo "• python : ${PY_ANY:-(없음)} — matplotlib 없음. 그림 기능을 쓰려면: ./scripts/install-host.sh --with-matplotlib"
+fi
 
 # config.json (JSON-encoded by node so odd characters in paths are safe). Keys the user added by hand
-# (claudeExtraArgs, codexExtraArgs, s2ApiKey, webDomains, keepApiKeyEnv) are preserved.
+# (claudeExtraArgs, codexExtraArgs, s2ApiKey, webDomains, keepApiKeyEnv, pythonSandbox) are preserved.
 "$NODE_BIN" -e '
 const fs = require("fs");
-const [file, claudePath, codexPath, p] = process.argv.slice(1);
+const [file, claudePath, codexPath, p, pythonPath] = process.argv.slice(1);
 let prev = {};
 try { prev = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
 fs.writeFileSync(file, JSON.stringify({
   ...prev,
   claudePath: claudePath || "claude",
   codexPath: codexPath || "codex",
+  pythonPath: pythonPath || "python3",
   path: p,
   installedAt: new Date().toISOString(),
 }, null, 2) + "\n", { mode: 0o600 });
-' "$INSTALL_DIR/config.json" "$CLAUDE_BIN" "$CODEX_BIN" "$USER_PATH"
+' "$INSTALL_DIR/config.json" "$CLAUDE_BIN" "$CODEX_BIN" "$USER_PATH" "$PY_BIN"
 echo "• PATH   : $(printf '%s' "$USER_PATH" | cut -c1-120)…"
 
 LAUNCHER="$INSTALL_DIR/run-host.sh"
