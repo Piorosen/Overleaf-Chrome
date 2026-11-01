@@ -4,7 +4,8 @@
 **Claude Code CLI(`claude`)** 또는 **OpenAI Codex CLI(`codex`)** 로 LaTeX 원고를 쓰고, 고치고, 검토합니다.
 API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
 
-기능을 어떻게 골랐는지(경쟁 제품 비교 포함)는 [docs/FEATURES.md](docs/FEATURES.md)에 있습니다.
+기능을 어떻게 골랐는지(경쟁 제품 비교 포함)는 [docs/FEATURES.md](docs/FEATURES.md)에,
+결함 분석과 처리 현황·남은 과제는 [docs/ANALYSIS.md](docs/ANALYSIS.md)에 있습니다.
 
 ## 주요 기능
 
@@ -14,6 +15,7 @@ API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
 | **교정** | 다듬기 · 문법 교정 · 학술체로 · 간결하게 · 명료하게 · 문장 나누기/합치기 · 흐름 개선 · 주장 완화/단정 · 능동태 · 상투 표현 제거 · 다른 표현 3개 · 단어 대안 |
 | **작성** | 이어쓰기 · 메모→문단 · 구체화 · 주제문 강화 · 연결 문장 · 제목 후보 · 초록 · 기여점 · 결론 · 한계점 · 키워드 · 하이라이트 · 리뷰 답변 · 커버레터 |
 | **LaTeX** | LaTeX 수정 · **컴파일 오류 해결**(로그를 읽어 원인 설명과 수정안) · 표/수식/그림/알고리즘/TikZ 만들기 · 캡션 개선 · 수식 설명 · BibTeX 정리 · 참고문헌→BibTeX |
+| **BibTeX 관리** (공식 메타데이터, AI 없음) | **BibTeX 추가**(DOI·arXiv·제목 → `.bib` + `\cite{키}`) · **누락 인용 채우기**(원고의 `\cite` 키 중 `.bib`에 없는 것) · **arXiv → 출판본 정정**(학회·저널 게재 확인 후 같은 키로 교체) · **BibTeX 점검**(중복·미사용·필드 누락·대문자 보호) |
 | **문헌** (웹 검색) | 인용 필요 위치 · **관련 문헌 찾기**(실재가 확인된 논문 + BibTeX) · **참고문헌 검증** |
 | **검토** | 리뷰어 시뮬레이션 · 논리·주장 점검 · 용어·표기 일관성 · 명료성 점검 · 역개요 · 제출 전 점검 · 한국어로 설명 · 쉬운 요약 |
 | **번역** | 한→영 · 영→한 · 한글 초안→영문 · 역번역 검증 |
@@ -25,7 +27,8 @@ API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
 - **기입 요청**: AI가 만든 표·알고리즘·TikZ를 적용하면, 그 결과에 필요한데 프리앰블에 없는 패키지를 알려 주고 바로 추가할 수 있습니다.
 - **논문 정보**(프로젝트별): 타깃 venue, 분야, 독자, US/UK 철자, 용어집, 메모. 모든 요청과 용어 통일에 반영됩니다.
 - **`% ai:` 지시문**: 원고에 `% ai: 실험 설정 문단 작성` 이라고 쓰고 실행하면 그 줄이 결과로 바뀝니다.
-- 모든 적용은 에디터 트랜잭션이라 `⌘/Ctrl+Z`로 되돌릴 수 있습니다. 생성 중에 문서가 바뀌면 원문 위치를 다시 찾고, 원문이 사라졌으면 적용하지 않습니다.
+- 모든 적용은 별도 실행 취소 단계라 `⌘/Ctrl+Z` 한 번으로 되돌릴 수 있습니다. 생성 중에 문서가 바뀌면 앞뒤 문맥으로 원문 위치를 다시 찾고, 위치가 애매하거나 사라졌거나 다른 파일이면 적용하지 않습니다. 읽기 전용 문서에는 적용하지 않습니다.
+- **적용 전 안전 검사**: AI 결과에서 원문의 `\cite`·`\ref`·`\label`·수식이 빠졌거나, 원문·문서에 없던 숫자나 인용이 생겼거나, 중괄호·환경 짝이 깨졌으면 경고합니다. 경고가 있으면 빠른 실행의 자동 적용도 멈춥니다.
 
 ## 구조
 
@@ -68,6 +71,17 @@ API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
 
 > **업데이트할 때**: `git pull` 후 `./scripts/install-host.sh` 다시 실행 → `chrome://extensions`에서 확장 새로고침(⟳) → Overleaf 탭 새로고침. 설정 페이지에 브리지와 확장의 버전이 다르면 경고가 뜹니다.
 
+## BibTeX 관리 (문헌 탭)
+
+메타데이터는 LLM 추측이 아니라 공식 데이터베이스에서 가져옵니다: arXiv API, Semantic Scholar, OpenAlex, DOI(Crossref·DataCite 콘텐츠 협상), Crossref 검색. (DBLP 는 2026년 현재 봇 차단으로 쓰지 않습니다.)
+
+- **BibTeX 추가**: DOI, arXiv ID/URL, 또는 제목을 넣고 찾기 → 후보(출처·연도·피인용 표시)에서 추가. arXiv 논문이면 출판본이 있는지 먼저 확인해 함께 보여 줍니다. `.tex`에서 실행하면 커서 위치에 `~\cite{키}`도 넣습니다.
+- **누락 인용 채우기**: 프로젝트의 모든 `.tex`에서 `\cite`(natbib·biblatex 포함) 키를 모아 `.bib`에 없는 것을 찾고, 키 이름(`vaswani2017attention` → 저자·연도·단어)과 인용 문장 주변 단어로 후보를 찾습니다. **원래 키 그대로** 추가합니다.
+- **arXiv → 출판본**: `journal={arXiv preprint …}`, `eprint`, CoRR, arXiv URL/DOI 로 인용한 항목마다 학회·저널 게재 여부를 교차 확인하고(제목 유사도·저자·연도), 확신이 높은 것만 미리 체크합니다. 같은 키로 교체하므로 본문 `\cite`는 그대로입니다. 각 항목의 변경 내용을 diff 로 볼 수 있습니다.
+- **BibTeX 점검**: 같은 논문의 중복 항목(DOI·arXiv·제목), 같은 키 중복, 인용되지 않은 항목, 필수 필드 누락, `{}`로 보호되지 않은 약어(BERT, ImageNet, t-SNE)를 찾고 대문자 보호를 한 번에 적용합니다.
+- `.bib`이 열려 있지 않으면 파일 트리에서 열어 적용한 뒤 원래 파일로 돌아옵니다(실패하면 복사).
+- Semantic Scholar 는 공용 요청 한도가 자주 찹니다. 그러면 "일부만 확인"이라고 표시하니 잠시 뒤 다시 확인하거나, 브리지 `config.json`에 `"s2ApiKey"`를 넣으세요.
+
 ## 사용법
 
 | 동작 | 방법 |
@@ -100,8 +114,11 @@ API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
 
 - 확장은 `overleaf.com/project/*`에서만 실행되며, 권한은 `nativeMessaging`, `storage` 두 개뿐입니다.
 - 호스트 매니페스트의 `allowed_origins` 때문에 **이 확장만** 브리지를 쓸 수 있습니다. CLI는 셸을 거치지 않고 인자 배열로 실행됩니다.
-- 생성 요청은 패널 클릭, 단축키, 에디터의 실제 키 입력(`isTrusted`)으로만 시작됩니다. 페이지 스크립트는 패널을 조작하거나 요청을 보낼 수 없습니다.
-- **Claude**: `--tools ""`로 파일·셸·웹 도구를 모두 끄고, `--strict-mcp-config`로 MCP 서버를 끄고, `--no-session-persistence`로 세션 기록을 남기지 않습니다. 순수 텍스트 생성만 합니다. 예외로 **문헌 기능**만 `WebSearch`, `WebFetch` 두 도구를 켭니다(설정에서 끌 수 있음).
+- 생성 요청은 패널 클릭, 단축키, 에디터의 실제 키 입력(`isTrusted`)으로만 시작됩니다. 페이지 스크립트는 패널(닫힌 Shadow DOM)을 조작하거나 요청을 보낼 수 없습니다. 다만 페이지는 원래 문서를 가지고 있으므로, Overleaf 페이지 자체가 침해되면 문서 내용을 바꿔 프롬프트에 영향을 줄 수는 있습니다.
+- **Claude**: `--tools ""`로 파일·셸·웹 도구를 모두 끄고, `--strict-mcp-config`로 MCP 서버를, `--settings '{"disableAllHooks":true}'`로 훅을, `CLAUDE_CODE_DISABLE_CLAUDE_MDS`·`CLAUDE_CODE_DISABLE_AUTO_MEMORY`로 CLAUDE.md·자동 메모리를 끄고, `--no-session-persistence`로 세션 기록을 남기지 않습니다. `--permission-mode dontAsk`를 명시해 사용자 기본 권한 모드(예: auto)가 다른 도구를 승인하지 못하게 합니다. 예외로 **웹 문헌 기능**만 `WebSearch`와 학술 도메인(arxiv.org, doi.org, aclanthology.org 등)으로 제한한 `WebFetch`를 켭니다(설정에서 끌 수 있음).
+- CLI 는 사용자 전용 0700 작업 폴더의 임시 폴더에서 별도 프로세스 그룹으로 실행되고, 취소·시간 초과 시 그룹 전체가 종료됩니다. 시스템 프롬프트는 명령 인자가 아니라 0600 파일로 전달됩니다.
+- CLI 추가 인자는 확장이 보내지 않고 브리지 `config.json`(`claudeExtraArgs`, `codexExtraArgs`)에서만 읽습니다. `ANTHROPIC_API_KEY`·`OPENAI_API_KEY` 환경 변수는 기본적으로 지워 구독 로그인을 씁니다(`"keepApiKeyEnv": true`로 유지 가능).
+- 확장 내부 통신은 페이지 스크립트가 볼 수 없는 비공개 채널(문서에 붙지 않은 DOM 노드의 이벤트)을 씁니다. 페이지의 `window.postMessage`로는 원고나 요청이 흐르지 않습니다.
 - **Codex**: `--sandbox read-only`로 쓰기와 네트워크를 막고 빈 임시 폴더에서 실행합니다. 다만 Codex에는 도구를 완전히 끄는 옵션이 없어 읽기 전용 셸 명령은 실행될 수 있습니다. 그래서 자동완성과 문헌 기능은 Claude로만 실행합니다. 민감한 환경이면 Claude 백엔드를 권장합니다.
 - 원고 내용(대상 텍스트와 주변 문맥)은 선택한 CLI를 통해 Anthropic 또는 OpenAI로 전송됩니다. 자동완성은 제안할 때마다 요청 하나(커서 앞 약 3,000자)를 보내므로, 신경 쓰이면 수동이나 끔으로 두세요.
 
@@ -118,6 +135,21 @@ API 키 없이 각 CLI에 로그인된 구독·계정을 그대로 씁니다.
 | "에디터를 찾지 못했습니다" | Overleaf의 Code Editor가 열려 있는지 확인 후 페이지 새로고침 |
 | "확장 프로그램이 업데이트되었습니다" | 확장을 새로고침한 뒤에는 Overleaf 탭도 새로고침 |
 | 시간 초과 | 설정에서 제한 시간을 늘리거나 사고 수준을 낮춤 |
+| "로컬 브리지(vX)가 확장과 다릅니다" | `git pull` 후 `./scripts/install-host.sh` 다시 실행 → 확장 새로고침 |
+| "읽기 전용 문서라 적용할 수 없습니다" | 보기 권한이거나 Overleaf 저장 오류로 잠긴 상태. 결과를 복사해 쓰거나 페이지 새로고침 |
+| 출판본·누락 인용을 못 찾음 | Semantic Scholar 요청 한도일 수 있음 → 잠시 뒤 다시, 또는 `config.json`에 `"s2ApiKey"` |
+
+브리지 설정 파일(`~/Library/Application Support/overleaf-ai-host/config.json`, 재설치해도 유지되는 키):
+
+```json
+{
+  "claudeExtraArgs": ["--fallback-model", "claude-sonnet-5-5"],
+  "codexExtraArgs": [],
+  "s2ApiKey": "Semantic Scholar API 키 (선택)",
+  "keepApiKeyEnv": false,
+  "webDomains": ["arxiv.org", "doi.org"]
+}
+```
 
 호스트 단독 점검:
 ```bash
@@ -138,6 +170,8 @@ extension/
   content/lint.js          로컬 점검 규칙
   content/terms.js         용어 통일 (용어집·하이픈·영미 철자)
   content/packages.js      필요한 패키지·TikZ 라이브러리 분석, 프리앰블 삽입 위치
+  content/bib.js           .bib 파서·직렬화, arXiv 판별, 인용 키 수집, 출판본 선택, BibTeX 점검
+  content/bridge.js        페이지가 볼 수 없는 비공개 통신 채널(document_start)
   content/diff.js          단어 단위 diff, 변경 단위 수락/거절
   content/markdown.js      안전한 마크다운 렌더러 (L42 링크)
   content/panel-css.js     패널 스타일 (Shadow DOM)
@@ -149,11 +183,12 @@ tests/                     단위 테스트, 가짜 CLI 호스트 테스트, 실
 ```
 
 ```bash
-npm test             # 단위 테스트 + 가짜 claude/codex 로 호스트 프로토콜 테스트 (66개)
+npm test             # 단위 테스트 + 가짜 claude/codex·가짜 HTTP API 로 브리지 테스트 (88개)
 npm install && npm run test:e2e
                      # 실제 Chrome 에 확장을 올리고 overleaf.com URL 로 CodeMirror 6 페이지를 띄워
                      # 설치된 브리지 + 실제 claude(Haiku 5.5)로 교정·후보·보고서·지시문·자동완성·
-                     # 용어 통일·패키지 기입 요청·웹 문헌 검색을 검증 (E2E_WEB=0 이면 웹 검색 생략)
+                     # 용어 통일·패키지 기입 요청·비공개 채널·BibTeX 4종·웹 문헌 검색을 검증
+                     # (E2E_WEB=0: 웹 검색 생략, E2E_ONLY_BIB=1: AI 없이 BibTeX 만)
 npm run package      # extension/ 을 zip 으로 묶기
 ```
 
