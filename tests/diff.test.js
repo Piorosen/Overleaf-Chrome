@@ -1,0 +1,31 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const D = require('../extension/content/diff.js');
+
+const join = (parts, ops) => parts.filter((p) => ops.includes(p.op)).map((p) => p.text).join('');
+
+test('diff reconstructs both sides', () => {
+  const a = 'We propose a novel method \\cite{x} that is fast.';
+  const b = 'We present a new method \\cite{x} that is very fast.';
+  const parts = D.diffWords(a, b);
+  assert.equal(join(parts, ['eq', 'del']), a);
+  assert.equal(join(parts, ['eq', 'ins']), b);
+  assert.ok(parts.some((p) => p.op === 'del' && p.text.includes('propose')));
+  assert.ok(parts.some((p) => p.op === 'ins' && p.text.includes('very')));
+});
+
+test('diff handles Korean and identical input', () => {
+  const a = '이 방법은 빠르다.';
+  const b = '이 방법은 매우 빠르다.';
+  const parts = D.diffWords(a, b);
+  assert.equal(join(parts, ['eq', 'ins']), b);
+  assert.deepEqual(D.diffWords(a, a), [{ op: 'eq', text: a }]);
+});
+
+test('renderDiffHtml escapes markup', () => {
+  const html = D.renderDiffHtml(D.diffWords('a <b> & x', 'a <i> & y'));
+  const withoutDiffTags = html.replace(/<\/?(del|ins)>/g, '');
+  assert.ok(!/[<>]/.test(withoutDiffTags));
+  assert.equal(withoutDiffTags, 'a &lt;bi&gt; &amp; xy');
+});
