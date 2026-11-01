@@ -32,15 +32,50 @@ Our method encodes inputs with a sparse attention layer and decodes them with a 
 \end{document}
 `;
 
-const HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Fake Overleaf</title>
-<style>body{margin:0;font-family:sans-serif}.bar{height:40px;background:#1b222c;color:#fff;display:flex;align-items:center;padding:0 12px}
+// A fake Overleaf page: CodeMirror 6 editor + a file tree whose items carry doc ids like Overleaf's.
+const fakePage = (doc, openName, others = []) => `<!doctype html><html><head><meta charset="utf-8"><title>Fake Overleaf</title>
+<style>body{margin:0;font-family:sans-serif}.bar{height:40px;background:#1b222c;color:#fff;display:flex;align-items:center;gap:10px;padding:0 12px}
 #editor{height:calc(100vh - 40px)} .cm-editor{height:100%}</style></head>
-<body><div class="bar">Fake Overleaf — <span class="file-tree"><span role="treeitem" aria-selected="true" aria-label="main.tex">main.tex</span></span></div>
+<body><div class="bar">Fake Overleaf — <ul class="file-tree" style="display:flex;gap:8px;list-style:none;margin:0;padding:0">
+<li role="treeitem" aria-selected="true" aria-label="${openName}"><span class="entity" data-file-id="open1" data-file-type="doc">${openName}</span></li>
+${others.map((o) => `<li role="treeitem" aria-selected="false" aria-label="${o.name}"><span class="entity" data-file-id="${o.id}" data-file-type="doc">${o.name}</span></li>`).join('')}
+</ul></div>
 <div id="editor"></div>
+<script>window.__pageSaw = []; window.addEventListener('message', (e) => { if (/olai/.test(JSON.stringify(e.data || ''))) window.__pageSaw.push(e.data); });</script>
 <script type="module">
 import { EditorView, basicSetup } from 'https://esm.sh/codemirror@6.0.1';
-window.__testView = new EditorView({ doc: ${JSON.stringify(DOC)}, extensions: [basicSetup, EditorView.lineWrapping], parent: document.getElementById('editor') });
+window.__testView = new EditorView({ doc: ${JSON.stringify(doc)}, extensions: [basicSetup, EditorView.lineWrapping], parent: document.getElementById('editor') });
 </script></body></html>`;
+const HTML = fakePage(DOC, 'main.tex');
+
+const BIB_DOC = String.raw`@article{vaswani2017attention,
+  title={Attention is all you need},
+  author={Vaswani, Ashish and Shazeer, Noam and Parmar, Niki},
+  journal={arXiv preprint arXiv:1706.03762},
+  year={2017}
+}
+
+@misc{devlin2018bert,
+  title={BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding},
+  author={Devlin, Jacob and Chang, Ming-Wei and Lee, Kenton and Toutanova, Kristina},
+  eprint={1810.04805},
+  archivePrefix={arXiv},
+  year={2018}
+}
+
+@article{unusedthing2020,
+  title={A paper nobody cites},
+  author={Nobody, A.},
+  journal={Journal of Nothing},
+  year={2020}
+}
+`;
+const MAIN_TEX = String.raw`\documentclass{article}
+egin{document}
+Transformers \cite{vaswani2017attention} and BERT \citep{devlin2018bert} build on residual networks \cite{he2016deep}, which won ImageNet in 2015.
+\end{document}
+`;
+const BIB_HTML = fakePage(BIB_DOC, 'refs.bib', [{ id: 'mainid', name: 'main.tex' }]);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log('•', ...a);
@@ -70,7 +105,10 @@ async function main() {
     page.on('pageerror', (e) => console.log('  [pageerror]', e.message));
     await page.setRequestInterception(true);
     page.on('request', (req) => {
-      if (req.url().startsWith('https://www.overleaf.com/project/')) req.respond({ status: 200, contentType: 'text/html', body: HTML });
+      const u = req.url();
+      if (u.startsWith('https://www.overleaf.com/Project/e2ebib/doc/mainid/download')) req.respond({ status: 200, contentType: 'text/plain', body: MAIN_TEX });
+      else if (u.startsWith('https://www.overleaf.com/project/e2ebib')) req.respond({ status: 200, contentType: 'text/html', body: BIB_HTML });
+      else if (u.startsWith('https://www.overleaf.com/project/')) req.respond({ status: 200, contentType: 'text/html', body: HTML });
       else req.continue();
     });
     await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
@@ -151,6 +189,8 @@ async function main() {
     log('categories:', cats);
     await page.screenshot({ path: path.join(OUT, '1-panel.png') });
 
+    const ONLY_BIB = process.env.E2E_ONLY_BIB === '1';
+    if (!ONLY_BIB) {
     // ---- 1) 문법 교정 on a selection; toggle one change off; apply
     await selectText('we propose');
     await sleep(400);
@@ -335,7 +375,81 @@ async function main() {
     log('preamble now:', JSON.stringify(pre));
     assert.match(pre, /\\usepackage\{booktabs\}/);
 
-    // ---- 11) model picker writes settings
+    // ---- 11) private channel: page scripts never saw extension traffic, and the bridge node is not in the DOM
+    const saw = await editor(() => ({ n: window.__pageSaw.length, node: !!document.querySelector('olai-bridge') }));
+    log('page-visible extension messages:', saw.n, '| bridge node in DOM:', saw.node);
+    assert.equal(saw.n, 0);
+    assert.equal(saw.node, false);
+
+    } // end of !ONLY_BIB
+
+    // ---- 12) BibTeX: arXiv → published, missing citations, add by DOI, audit (real metadata APIs, no AI)
+    await page.goto('https://www.overleaf.com/project/e2ebib', { waitUntil: 'networkidle0' });
+    await page.waitForSelector('.cm-editor');
+    await page.waitForFunction(() => document.getElementById('overleaf-ai-extension-root'), { timeout: 10000 });
+    await sleep(1200);
+    const ls = await evalOn(await one('launcher'), function () { const r = this.getBoundingClientRect(); return { hidden: this.hidden, display: getComputedStyle(this).display, w: r.width, h: r.height, panel: !this.parentElement.querySelector('.panel').hidden }; });
+    log('bib page launcher state:', JSON.stringify(ls));
+    if (ls.panel) { /* panel already open */ } else await click(await one('launcher'));
+    await sleep(500);
+    await clickText('cat', '문헌');
+    await clickText('chip', 'arXiv → 출판본');
+    await sleep(1500);
+    log('bib summary:', (await text('bib-view')).split('\n')[0]);
+    await click(await one('bib-check-pub'));
+    const t1 = Date.now();
+    for (let i = 0; i < 120; i++) { await sleep(500); const tx = await text('bib-view'); if (!/확인 중/.test(tx) && /devlin2018bert/.test(tx)) break; }
+    const upText = (await text('bib-view')).replace(/\s+/g, ' ');
+    log(`publication check (${((Date.now() - t1) / 1000).toFixed(1)}s):`, upText.slice(0, 400));
+    await page.screenshot({ path: path.join(OUT, '11-bib-upgrade.png') });
+    assert.match(upText, /devlin2018bert → [^·]*(NAACL|North American|Association for Computational)/i);
+    await click(await one('bib-apply-up'));
+    await sleep(1500);
+    const bibAfter = await docText();
+    assert.match(bibAfter, /@inproceedings\{devlin2018bert,/);
+    assert.match(bibAfter, /10\.18653\/v1\/n19-1423/i);
+    log('devlin2018bert corrected → @inproceedings with DOI 10.18653/v1/N19-1423 ✓', /@inproceedings\{vaswani2017attention/.test(bibAfter) ? '| vaswani → NeurIPS ✓' : '| vaswani unchanged (S2 busy?)');
+
+    await clickText('chip', '누락 인용 채우기');
+    await sleep(1500);
+    await click(await one('bib-find-missing'));
+    for (let i = 0; i < 60; i++) { await sleep(500); if (/일치도/.test(await text('bib-view')) || /찾지 못했습니다/.test(await text('bib-view'))) break; }
+    const missText = (await text('bib-view')).replace(/\s+/g, ' ');
+    log('missing:', missText.slice(0, 300));
+    assert.match(missText, /he2016deep/);
+    await click((await findAll('bib-add-one'))[0]);
+    for (let i = 0; i < 20 && !/he2016deep/.test(await docText()); i++) await sleep(400);
+    const added = await docText();
+    assert.match(added, /@\w+\{he2016deep,/);
+    log('he2016deep added:', (added.match(/@\w+\{he2016deep,[\s\S]*?\n\}/) || [''])[0].replace(/\s+/g, ' ').slice(0, 160));
+
+    await clickText('chip', 'BibTeX 추가');
+    await sleep(1200);
+    const input = await one('bib-input');
+    await evalOn(input, function () { this.focus(); });
+    await page.keyboard.type('10.1145/3065386');
+    await click(await one('bib-search'));
+    for (let i = 0; i < 40; i++) { await sleep(400); if ((await findAll('bib-add-one')).length) break; }
+    log('DOI lookup:', (await text('bib-results')).replace(/\s+/g, ' ').slice(0, 160));
+    await click((await findAll('bib-add-one'))[0]);
+    for (let i = 0; i < 20 && !/3065386/.test(await docText()); i++) await sleep(400);
+    assert.match(await docText(), /3065386/);
+    log('DOI entry appended ✓');
+
+    await clickText('chip', 'BibTeX 점검');
+    await sleep(1500);
+    const auditText = (await text('bib-view')).replace(/\s+/g, ' ');
+    log('audit:', auditText.slice(0, 260));
+    assert.match(auditText, /unusedthing2020/);
+    await page.screenshot({ path: path.join(OUT, '12-bib-audit.png') });
+
+    await page.goto('https://www.overleaf.com/project/e2e', { waitUntil: 'networkidle0' });
+    await page.waitForSelector('.cm-editor');
+    await sleep(800);
+    await click(await one('launcher'));
+    await sleep(400);
+
+    // ---- 13) model picker writes settings
     const modelSel = await one('model');
     await evalOn(modelSel, function () { this.value = 'claude-sonnet-5-5'; this.dispatchEvent(new Event('change', { bubbles: true })); });
     await sleep(300);

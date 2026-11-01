@@ -160,7 +160,7 @@ test('buildRequest: codex model/effort/extra args', () => {
   assert.equal(req.backend, 'codex');
   assert.equal(req.model, 'gpt-5.5');
   assert.equal(req.effort, 'xhigh'); // max is mapped to codex's xhigh
-  assert.deepEqual(req.extraArgs, ['-c', 'a=b c']);
+  assert.equal(req.extraArgs, undefined, 'extra CLI args are never sent with requests (host config only)');
 });
 
 test('buildRequest: variants and fix output contracts', () => {
@@ -252,4 +252,21 @@ test('postProcessCompletion normalizes spacing, paragraphs, fences and echoes', 
 test('parseCustomPresets supports an optional kind column', () => {
   const list = P.parseCustomPresets('톤 | Be polite.\nbad line\n | empty\n요약|Summarize.|report\n이상|X|weird');
   assert.deepEqual(list.map((a) => [a.label, a.kind]), [['톤', 'transform'], ['요약', 'report'], ['이상', 'transform']]);
+});
+
+test('safetyCheck flags dropped citations, lost math and new numbers', () => {
+  const w = P.safetyCheck('We beat X by 3.2% \\cite{a} (Table~\\ref{t}) $x$.', 'We beat X by 4.1% significantly (Table~\\ref{t}).').map((x) => x.message).join(' | ');
+  assert.match(w, /인용 사라짐: a/);
+  assert.match(w, /수식 1개가 줄었습니다/);
+  assert.match(w, /없던 숫자: 4\.1%/);
+  assert.deepEqual(P.safetyCheck('', 'New 7.3% gain \\cite{zz}.', 'doc mentions \\cite{aa} only').map((x) => x.message.slice(0, 12)), ['원문에 없던 인용 추가됨'.slice(0, 12), '원문·문서에 없던 숫자'.slice(0, 12)]);
+  assert.deepEqual(P.safetyCheck('Same \\cite{a} text $x$.', 'Same text \\cite{a}, rephrased $x$.'), []);
+  assert.match(P.safetyCheck('a', '\\begin{table}x').map((x) => x.message).join(), /begin\/\\end|중괄호/);
+});
+
+test('sanitizeForOverleaf folds math letters and drops emoji; extractLogErrors keeps errors', () => {
+  assert.deepEqual(P.sanitizeForOverleaf('let 𝑥 be 🙂 ok'), { text: 'let x be  ok', removed: 1 });
+  const e = P.extractLogErrors('(./main.tex (./sec/a.tex\n! Undefined control sequence.\nl.12 \\foo\nmore');
+  assert.match(e, /\[file\] \.\/sec\/a\.tex\n! Undefined control sequence\.\nl\.12/);
+  assert.deepEqual(P.parseLogLocation(e), { file: 'sec/a.tex', line: 12 });
 });

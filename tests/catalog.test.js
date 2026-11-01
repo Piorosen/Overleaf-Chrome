@@ -3,8 +3,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const C = require('../extension/content/catalog.js');
 
-const KINDS = new Set(['transform', 'generate', 'compose', 'make', 'variants', 'report', 'fix', 'lint', 'terms', 'packages']);
-const LOCAL = new Set(['lint', 'terms', 'packages']);
+const KINDS = new Set(['transform', 'generate', 'compose', 'make', 'variants', 'report', 'fix', 'lint', 'terms', 'packages', 'bib']);
+const LOCAL = new Set(['lint', 'terms', 'packages', 'bib']);
 
 test('every action is well-formed', () => {
   const ids = new Set();
