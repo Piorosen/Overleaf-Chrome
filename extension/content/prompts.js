@@ -27,6 +27,12 @@
     autoLint: true,                // re-run local checks while typing (no AI)
     allowWeb: true,                // allow web-search actions (Claude backend only)
     lastCategory: 'edit',
+    // Inline autocomplete (ghost text). Always runs on the Claude CLI (fast, tools disabled).
+    autocomplete: 'auto',          // 'auto' (after a pause) | 'manual' (Alt+\\) | 'off'
+    acModel: 'claude-haiku-5-5',
+    acEffort: 'low',
+    acDelayMs: 1200,
+    acMaxWords: 25,
   };
 
   const LATEX_RULES = [
@@ -490,8 +496,113 @@
     return String(text).split('\n').map((l) => (l.trim() ? `% ${l}` : '%')).join('\n');
   }
 
+  // ---------------------------------------------------------- autocomplete ---
+
+  const MATH_ENV_RE = /\\(begin|end)\{(equation|align|gather|multline|eqnarray|displaymath|math|flalign|alignat)\*?\}/g;
+
+  /**
+   * Should we offer a completion at this cursor? ctx from main-world completionContext:
+   * { before, after, lineBefore, lineAfter, hasSelection, focused, composing, inPreamble }
+   * Returns '' when OK, otherwise a short reason (for debugging/tests).
+   */
+  function completionBlocker(ctx, { manual = false } = {}) {
+    if (!ctx || !ctx.focused) return 'not-focused';
+    if (ctx.hasSelection) return 'selection';
+    if (ctx.composing) return 'composing';
+    if (ctx.inPreamble) return 'preamble';
+    if (!/^[\s})\]]*$/.test(ctx.lineAfter || '')) return 'mid-line';
+    const lb = ctx.lineBefore || '';
+    if (/(^|[^\\])%/.test(lb)) return 'comment';
+    if (/\\[A-Za-z@]*$/.test(lb)) return 'typing-command';
+    if (((lb.replace(/\\\$/g, '').match(/\$/g) || []).length % 2) === 1) return 'inline-math';
+    let depth = 0;
+    let m;
+    MATH_ENV_RE.lastIndex = 0;
+    const tail = (ctx.before || '').slice(-4000);
+    while ((m = MATH_ENV_RE.exec(tail))) depth += m[1] === 'begin' ? 1 : -1;
+    if (depth > 0) return 'math-env';
+    if (/\\\[(?![\s\S]*\\\])/.test(tail)) return 'display-math';
+    if (!manual) {
+      if (lb.trim().length < 3) return 'short-line';
+      if (!/[\p{L}\p{N},;:.!?)\]}'"]\s?$/u.test(lb)) return 'odd-char';
+    }
+    return '';
+  }
+
+  function buildCompletionRequest({ settings, before, after, fileName, profile }) {
+    const s = { ...DEFAULT_SETTINGS, ...settings };
+    const maxWords = Math.max(5, Math.min(80, Number(s.acMaxWords) || 25));
+    const system = [
+      'You are an inline autocomplete engine inside the Overleaf LaTeX editor, helping an author write an academic paper.',
+      'Output ONLY the text that should appear immediately after the cursor — nothing else (no quotes, no markdown, no explanation).',
+      `Continue naturally: finish the current sentence, or if it is already complete, write at most one more sentence. Hard limit: ${maxWords} words.`,
+      'Start exactly at the cursor: begin with a space if one is needed; if the cursor is inside a word, complete that word without a leading space.',
+      'Never repeat text that is before the cursor. Match the language, tense, terminology and notation of the surrounding text.',
+      'Keep LaTeX valid (close any brace you open). Do not add \\cite commands, numbers or results that are not already implied by the text.',
+      'If nothing sensible can be added, output nothing.',
+    ].join('\n') + (profileText(profile, C) ? `\n\n${profileText(profile, C)}` : '');
+    const parts = [];
+    if (fileName) parts.push(`<file_name>${fileName}</file_name>`);
+    parts.push(`<text_before_cursor>\n${before.slice(-3000)}</text_before_cursor>`);
+    if (after && after.trim()) parts.push(`<text_after_cursor>${after.slice(0, 600)}\n</text_after_cursor>`);
+    const lastWord = (/[\p{L}\p{N}_'-]+$/u.exec(before) || [''])[0];
+    parts.push(lastWord
+      ? `The cursor is right after "${before.slice(-40).replace(/\s+/g, ' ')}". Your output MUST begin with the exact characters "${lastWord}" (the word at the cursor) and then continue — e.g. after "...we us" output "using the data", after "...models have" output "have become ...".`
+      : `The cursor is right after "${before.slice(-40).replace(/\s+/g, ' ')}". Write only what comes after it — do not repeat it.`);
+    return {
+      backend: 'claude',
+      model: (s.acModel || '').trim(),
+      effort: C ? C.resolveEffort('claude', (s.acModel || '').trim(), s.acEffort || 'low', 'low', s) : 'low',
+      web: false,
+      extraArgs: [],
+      timeoutSec: 45,
+      system,
+      prompt: parts.join('\n\n'),
+      output: 'completion',
+    };
+  }
+
+  // Normalize a completion so it can be inserted at the cursor.
+  function postProcessCompletion(raw, before, maxChars = 400) {
+    let s = stripFence(String(raw || '').replace(/\r\n?/g, '\n'));
+    s = s.replace(/^\s*```[\w-]*\n/, '').replace(/\n```\s*$/, ''); // stray fences
+    s = s.replace(/^<[^>]*cursor[^>]*>/i, '');
+    s = s.split(/\n\s*\n/)[0];                 // stop at a paragraph break
+    s = s.replace(/[ \t]*\n[ \t]*/g, ' ');       // single newlines inside a paragraph are spaces
+    s = s.replace(/\s+$/, '');
+    if (!s.trim()) return '';
+    const prev = before.slice(-1);
+    const lastWord = (/[\p{L}\p{N}_'-]+$/u.exec(before) || [''])[0];
+    const b = before.slice(-80);
+    const t = s.replace(/^\s+/, '');
+    if (lastWord && lastWord.startsWith(t)) return ''; // still streaming the restated word — wait
+    let echoed = false;
+    // 1) The model repeats words before the cursor (as instructed for the word at the cursor, or by
+    //    accident for longer phrases): strip the longest word-aligned overlap.
+    for (let k = Math.min(b.length, t.length); k >= 1; k--) {
+      const suffix = b.slice(-k);
+      const startsWord = b.length === k || /[\s(\[{~]/.test(b[b.length - k - 1]);
+      if (!startsWord || !/^\S/.test(suffix) || !t.startsWith(suffix)) continue;
+      if (k < 3 && suffix !== lastWord) continue; // short overlaps only for the word at the cursor
+      s = t.slice(k);
+      echoed = true;
+      break;
+    }
+    if (!echoed) {
+      if (/\s/.test(prev) || !prev) s = s.replace(/^\s+/, '');
+      // The model did not restate the word at the cursor: treat its output as a new word.
+      else if (/[\p{L}\p{N}.,;:!?)]/u.test(prev) && /^[\p{L}\p{N}\\(]/u.test(s)) s = ` ${s}`;
+    }
+    if (s.length > maxChars) {
+      const cut = s.slice(0, maxChars);
+      s = cut.slice(0, Math.max(cut.lastIndexOf(' '), 1));
+    }
+    return s;
+  }
+
   const api = {
     DEFAULT_SETTINGS, LATEX_RULES, REPORT_RULES,
+    completionBlocker, buildCompletionRequest, postProcessCompletion,
     parseDirective, splitLines, lineNumberAt, numberLines, findParagraph, findSection,
     resolveTarget, parseLogLine, resolveFixTarget, profileText, buildRequest, outputKind,
     postProcess, parseVariants, parseFix, postProcessReport, insertionText, asLatexComment,
