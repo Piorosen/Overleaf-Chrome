@@ -3,7 +3,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const C = require('../extension/content/catalog.js');
 
-const KINDS = new Set(['transform', 'generate', 'compose', 'make', 'variants', 'report', 'fix', 'lint']);
+const KINDS = new Set(['transform', 'generate', 'compose', 'make', 'variants', 'report', 'fix', 'lint', 'terms', 'packages']);
+const LOCAL = new Set(['lint', 'terms', 'packages']);
 
 test('every action is well-formed', () => {
   const ids = new Set();
@@ -14,7 +15,7 @@ test('every action is well-formed', () => {
     assert.ok(cats.has(a.cat), `${a.id}: unknown category ${a.cat}`);
     assert.ok(KINDS.has(a.kind), `${a.id}: unknown kind ${a.kind}`);
     assert.ok(a.label && a.desc, `${a.id}: label/desc`);
-    if (a.kind !== 'lint') assert.ok(a.instruction && a.instruction.length > 20, `${a.id}: instruction`);
+    if (!LOCAL.has(a.kind)) assert.ok(a.instruction && a.instruction.length > 20, `${a.id}: instruction`);
     if (a.effort) assert.ok(['low', 'medium', 'high'].includes(a.effort), `${a.id}: effort hint`);
     if (a.scope) assert.ok(['paragraph', 'section', 'document'].includes(a.scope), `${a.id}: scope`);
     if (a.kind === 'variants') assert.ok(a.count >= 2, `${a.id}: count`);

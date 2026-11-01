@@ -119,7 +119,7 @@ test('ping includes CLI default settings objects', async () => {
   const pong = msgs.find((m) => m.type === 'pong');
   assert.equal(typeof pong.claude.defaults, 'object');
   assert.equal(typeof pong.codex.defaults, 'object');
-  assert.equal(pong.hostVersion, '0.2.0');
+  assert.equal(pong.hostVersion, '0.3.0');
 });
 
 test('claude CLI error is surfaced', async () => {

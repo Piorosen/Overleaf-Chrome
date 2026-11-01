@@ -57,6 +57,7 @@ test('acronyms must be defined', () => {
 
 test('spelling variants: hyphenation and -ise/-ize', () => {
   assert.ok(has(BASE('We pre-train the model. Pretrain again.'), 'hyphen-variant'));
+  assert.ok(!has(BASE('A sparse-attention layer uses sparse attention.'), 'hyphen-variant'));
   assert.ok(has(BASE('We optimise A and optimize B.'), 'us-uk-variant'));
   assert.ok(!has(BASE('We optimize A and optimize B.'), 'us-uk-variant'));
 });

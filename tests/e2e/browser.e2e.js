@@ -243,7 +243,99 @@ async function main() {
       await page.screenshot({ path: path.join(OUT, '6-refs.png') });
     }
 
-    // ---- 7) model picker writes settings
+    // ---- 7) autocomplete (auto): pause after typing → ghost text → Tab accepts
+    const ghost = () => editor(() => { const g = document.querySelector('.olai-ghost'); return g && g.style.display !== 'none' ? g.textContent : ''; });
+    async function waitGhost(ms = 30000) {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms) { const g = await ghost(); if (g) return g; await sleep(250); }
+      return '';
+    }
+    await cursorAt('Transformers changed natural language processing.', 'Transformers changed natural language processing.'.length);
+    await page.keyboard.type(' Since then, attention models have', { delay: 25 });
+    const t0 = Date.now();
+    const suggestion = await waitGhost();
+    log(`autocomplete ghost after ${((Date.now() - t0) / 1000).toFixed(1)}s:`, JSON.stringify(suggestion));
+    assert.ok(suggestion, 'expected a ghost suggestion');
+    await page.screenshot({ path: path.join(OUT, '8-autocomplete.png') });
+    await sleep(4000); // let the stream finish so the ghost is final
+    const finalSug = await ghost();
+    const lineBefore = (await docText()).split('\n')[6];
+    await page.keyboard.press('Tab');
+    await sleep(300);
+    const lineAfter = (await docText()).split('\n')[6];
+    log('Tab accepted →', JSON.stringify(lineAfter.slice(-100)));
+    assert.equal(lineAfter, lineBefore + finalSug, 'Tab inserted exactly the ghost text');
+    assert.ok(!/have\s*have/.test(lineAfter), 'no echoed word');
+    assert.match(lineAfter, /models have\s\S/, 'a space separates the next word');
+    assert.equal(await ghost(), '');
+
+    // ---- 8) autocomplete (manual): nothing on pause; Alt+\ requests; Esc dismisses
+    await evalOn(await one('ac-mode'), function () { this.value = 'manual'; this.dispatchEvent(new Event('change', { bubbles: true })); });
+    await page.keyboard.type(' We', { delay: 25 });
+    await sleep(2500);
+    assert.equal(await ghost(), '', 'manual mode: no automatic suggestion');
+    await page.keyboard.down('Alt');
+    await page.keyboard.press('Backslash');
+    await page.keyboard.up('Alt');
+    const manualSug = await waitGhost();
+    log('manual (Alt+\\) ghost:', JSON.stringify(manualSug));
+    assert.ok(manualSug);
+    const beforeEsc = await docText();
+    await page.keyboard.press('Escape');
+    await sleep(200);
+    assert.equal(await ghost(), '');
+    assert.equal(await docText(), beforeEsc, 'Esc leaves the document unchanged');
+    log('Esc dismissed ✓');
+    await evalOn(await one('ac-mode'), function () { this.value = 'off'; this.dispatchEvent(new Event('change', { bubbles: true })); });
+
+    // ---- 9) term unification across the document (one transaction)
+    await editor(() => {
+      const v = window.__testView; const d = v.state.doc.toString(); const at = d.indexOf('\\section{Method}');
+      v.dispatch({ changes: { from: at, insert: 'We pre-train on a data set. Pretraining helps, and the data set is public. We optimise it, then optimize it and optimize again.\n' } });
+    });
+    await clickText('cat', '점검');
+    await sleep(300);
+    await clickText('chip', '용어 통일');
+    await sleep(900);
+    const termsText = (await text('lint-view')).replace(/\s+/g, ' ');
+    log('terms view:', termsText.slice(0, 200));
+    await page.screenshot({ path: path.join(OUT, '9-terms.png') });
+    await click(await one('terms-apply'));
+    await sleep(600);
+    const unified = await docText();
+    assert.ok(!/optimise/.test(unified), 'optimise → optimize');
+    log('after unify:', JSON.stringify(unified.split('\n').find((l) => l.startsWith('We pre')) || unified.split('\n').find((l) => /optimize it/.test(l))));
+    await page.keyboard.down('Meta'); await page.keyboard.press('z'); await page.keyboard.up('Meta');
+    await editor(() => window.__testView.focus());
+    await page.keyboard.down('Meta'); await page.keyboard.press('z'); await page.keyboard.up('Meta');
+    await sleep(200);
+    log('one ⌘Z restores all term changes:', /optimise/.test(await docText()));
+
+    // ---- 10) generated table → package prompt (기입 요청) → preamble insertion
+    await clickText('cat', 'LaTeX');
+    await editor(() => {
+      const v = window.__testView; const d = v.state.doc.toString(); const at = d.indexOf('\\end{document}');
+      v.dispatch({ changes: { from: at, insert: 'Model, Accuracy, F1\nBaseline, 81.2, 79.0\nOurs, 86.5, 84.1\n' } });
+      const d2 = v.state.doc.toString(); const a = d2.indexOf('Model, Accuracy'); const b = d2.indexOf('84.1') + 4;
+      v.dispatch({ selection: { anchor: a, head: b } }); v.focus();
+    });
+    await sleep(300);
+    await clickText('chip', '표 만들기');
+    log('table:', await waitStatus(/^(완료|변경할).*\[표 만들기\]/));
+    await clickText('apply', '적용');
+    await sleep(1200);
+    const prompt = await visible('pkg-prompt');
+    const promptText = prompt ? (await text('pkg-msg')).replace(/\s+/g, ' ') : '(no prompt)';
+    log('package prompt:', promptText);
+    await page.screenshot({ path: path.join(OUT, '10-pkg-prompt.png') });
+    assert.ok(prompt, 'expected a package prompt (booktabs)');
+    await click(await one('pkg-add'));
+    await sleep(500);
+    const pre = (await docText()).split('\\begin{document}')[0];
+    log('preamble now:', JSON.stringify(pre));
+    assert.match(pre, /\\usepackage\{booktabs\}/);
+
+    // ---- 11) model picker writes settings
     const modelSel = await one('model');
     await evalOn(modelSel, function () { this.value = 'claude-sonnet-5-5'; this.dispatchEvent(new Event('change', { bubbles: true })); });
     await sleep(300);

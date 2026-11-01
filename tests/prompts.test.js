@@ -207,6 +207,48 @@ test('splitArgs follows shell quoting', () => {
   assert.deepEqual(P.splitArgs('   '), []);
 });
 
+test('completionBlocker: only at line end, outside comments/math/preamble/commands', () => {
+  const ctx = (lineBefore, extra = {}) => ({ focused: true, lineAfter: '', before: `\\begin{document}\n${lineBefore}`, lineBefore, ...extra });
+  assert.equal(P.completionBlocker(ctx('We propose a ')), '');
+  assert.equal(P.completionBlocker(ctx('Results improve.')), '');
+  assert.equal(P.completionBlocker(ctx('text % note ')), 'comment');
+  assert.equal(P.completionBlocker(ctx('Let $x = ')), 'inline-math');
+  assert.equal(P.completionBlocker(ctx('see \\cite')), 'typing-command');
+  assert.equal(P.completionBlocker(ctx('We see', { before: '\\begin{align}\nWe see' })), 'math-env');
+  assert.equal(P.completionBlocker(ctx('We see', { lineAfter: ' more text' })), 'mid-line');
+  assert.equal(P.completionBlocker(ctx('We see', { lineAfter: '}' })), '');
+  assert.equal(P.completionBlocker(ctx('We see', { inPreamble: true })), 'preamble');
+  assert.equal(P.completionBlocker(ctx('We see', { composing: true })), 'composing');
+  assert.equal(P.completionBlocker(ctx('ab')), 'short-line');
+  assert.equal(P.completionBlocker(ctx('ab'), { manual: true }), '');
+});
+
+test('buildCompletionRequest always uses Claude with the autocomplete model', () => {
+  const req = P.buildCompletionRequest({ settings: { backend: 'codex', acModel: 'claude-haiku-5-5', acEffort: 'low', acMaxWords: 20 }, before: 'We propose a', after: '', fileName: 'main.tex', profile: { field: 'NLP' } });
+  assert.equal(req.backend, 'claude');
+  assert.equal(req.model, 'claude-haiku-5-5');
+  assert.equal(req.effort, 'low');
+  assert.match(req.system, /Hard limit: 20 words/);
+  assert.match(req.system, /Field: NLP/);
+  assert.match(req.prompt, /<text_before_cursor>\nWe propose a<\/text_before_cursor>/);
+});
+
+test('postProcessCompletion normalizes spacing, paragraphs, fences and echoes', () => {
+  assert.equal(P.postProcessCompletion(' method that works.', 'We propose a '), 'method that works.');
+  assert.equal(P.postProcessCompletion('Next sentence.', 'It works.'), ' Next sentence.');
+  assert.equal(P.postProcessCompletion('using data', 'We are us'), 'ing data');      // restated fragment → completes the word
+  assert.equal(P.postProcessCompletion('have become the', 'models have'), ' become the'); // restated word → new word
+  assert.equal(P.postProcessCompletion('become the', 'models have'), ' become the');      // not restated → treated as new word
+  assert.equal(P.postProcessCompletion('```\nmethod that\nworks.\n\nNew para', 'We propose a '), 'method that works.');
+  assert.equal(P.postProcessCompletion('   \n ', 'x'), '');
+  assert.equal(P.postProcessCompletion('have shown strong results.', 'attention models have'), ' shown strong results.');
+  assert.equal(P.postProcessCompletion('have', 'attention models have'), '');
+  assert.equal(P.postProcessCompletion('models have shown', 'Since then, attention models have'), ' shown');
+  assert.equal(P.postProcessCompletion('theory of learning', 'a the'), 'ory of learning');
+  assert.equal(P.postProcessCompletion('ha', 'models have'), '');   // partial stream of the restated word
+  assert.ok(P.postProcessCompletion('word '.repeat(200), 'x ').length <= 400);
+});
+
 test('parseCustomPresets supports an optional kind column', () => {
   const list = P.parseCustomPresets('톤 | Be polite.\nbad line\n | empty\n요약|Summarize.|report\n이상|X|weird');
   assert.deepEqual(list.map((a) => [a.label, a.kind]), [['톤', 'transform'], ['요약', 'report'], ['이상', 'transform']]);
