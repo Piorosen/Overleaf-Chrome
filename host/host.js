@@ -515,7 +515,7 @@ async function httpGet(url, { accept = 'application/json', method = 'GET', body,
   }
 }
 
-const OA_FIELDS = 'id,display_name,doi,type,publication_year,authorships,primary_location,locations,biblio';
+const OA_FIELDS = 'id,display_name,doi,type,publication_year,authorships,primary_location,locations,biblio,cited_by_count';
 
 function simplifyOpenAlex(w) {
   if (!w || typeof w !== 'object') return null;
@@ -536,6 +536,7 @@ function simplifyOpenAlex(w) {
     primary: loc(w.primary_location),
     locations: (w.locations || []).map(loc),
     biblio: w.biblio || {},
+    citedBy: w.cited_by_count || 0,
   };
 }
 
@@ -601,7 +602,7 @@ async function bibLookup(msg) {
   if (op === 'crossref-search') {
     const q = String(msg.q || '').slice(0, 300);
     if (!q.trim()) return [];
-    const text = await httpGet(`${EP.crossref}/works?query.bibliographic=${encodeURIComponent(q)}&rows=${Math.min(Number(msg.max) || 5, 20)}&select=DOI,title,author,issued,container-title,type`);
+    const text = await httpGet(`${EP.crossref}/works?query.bibliographic=${encodeURIComponent(q)}&rows=${Math.min(Number(msg.max) || 5, 20)}&select=DOI,title,author,issued,container-title,type,is-referenced-by-count`);
     const items = ((JSON.parse(text) || {}).message || {}).items || [];
     return items.map((it) => ({
       doi: it.DOI,
@@ -610,6 +611,7 @@ async function bibLookup(msg) {
       year: (((it.issued || {})['date-parts'] || [])[0] || [])[0] || null,
       type: it.type,
       authors: (it.author || []).map((a) => [a.given, a.family].filter(Boolean).join(' ')),
+      citedBy: it['is-referenced-by-count'] || 0,
     }));
   }
   throw new Error(`unknown bib op: ${op}`);
