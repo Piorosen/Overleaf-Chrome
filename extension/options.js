@@ -6,7 +6,8 @@
   const $ = (id) => document.getElementById(id);
   const FIELDS = ['claudeModel', 'claudeEffort', 'codexModel', 'codexEffort', 'claudeCustomModels', 'codexCustomModels',
     'claudeExtraArgs', 'codexExtraArgs', 'styleGuide', 'customPresets', 'explainLang', 'contextChars', 'timeoutSec',
-    'includeFullDoc', 'allowWeb', 'autoLint', 'quickActionId', 'autoApplyQuick', 'showLauncher'];
+    'includeFullDoc', 'allowWeb', 'autoLint', 'quickActionId', 'autoApplyQuick', 'showLauncher',
+    'autocomplete', 'acModel', 'acEffort', 'acDelayMs', 'acMaxWords'];
 
   $('ext-id').textContent = chrome.runtime.id;
 
@@ -56,6 +57,28 @@
     sel.value = opts.includes(chosen) ? chosen : opts[0];
   }
 
+  function fillAutocomplete() {
+    const msel = $('acModel');
+    msel.textContent = '';
+    for (const m of C.modelsFor('claude', settings).filter((x) => x.id)) {
+      const o = document.createElement('option');
+      o.value = m.id;
+      o.textContent = `${m.label}${m.note ? ` — ${m.note}` : ''}`;
+      msel.appendChild(o);
+    }
+    msel.value = settings.acModel;
+    const esel = $('acEffort');
+    esel.textContent = '';
+    const supported = C.effortsFor('claude', settings.acModel, settings);
+    for (const e of ['', ...supported]) {
+      const o = document.createElement('option');
+      o.value = e;
+      o.textContent = C.EFFORT_LABELS[e] || e;
+      esel.appendChild(o);
+    }
+    esel.value = ['', ...supported].includes(settings.acEffort) ? settings.acEffort : (supported.includes('low') ? 'low' : '');
+  }
+
   function fillQuickActions() {
     const sel = $('quickActionId');
     const actions = [...C.ACTIONS, ...P.parseCustomPresets(settings.customPresets)].filter((a) => a.kind === 'transform');
@@ -76,6 +99,7 @@
     fillEfforts('claude');
     fillEfforts('codex');
     fillQuickActions();
+    fillAutocomplete();
     for (const k of FIELDS) {
       const el = $(k);
       if (el.type === 'checkbox') el.checked = !!settings[k];
@@ -94,6 +118,7 @@
     if (key === 'claudeModel' || key === 'claudeCustomModels') { fillModels('claude'); fillEfforts('claude'); }
     if (key === 'codexModel' || key === 'codexCustomModels') { fillModels('codex'); fillEfforts('codex'); }
     if (key === 'backend') testConnection();
+    if (key === 'acModel' || key === 'claudeCustomModels') fillAutocomplete();
   }
 
   for (const r of document.querySelectorAll('input[name="backend"]')) {

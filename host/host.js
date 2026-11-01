@@ -32,7 +32,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const HOST_VERSION = '0.2.0';
+const HOST_VERSION = '0.3.0';
 const MAX_OUT_MSG = 256 * 1024; // keep every message far below Chrome's 1 MB host->extension cap
 const WORKDIR = path.join(os.tmpdir(), 'overleaf-ai-host');
 

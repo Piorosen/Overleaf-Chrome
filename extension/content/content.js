@@ -9,6 +9,8 @@
   const D = globalThis.OLAI_DIFF;
   const L = globalThis.OLAI_LINT;
   const M = globalThis.OLAI_MD;
+  const K = globalThis.OLAI_PKG;
+  const T = globalThis.OLAI_TERMS;
   const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
   const ALT = IS_MAC ? '⌥' : 'Alt';
@@ -140,14 +142,26 @@
               <button class="btn after" type="button">원문 아래에 추가</button>
               <button class="btn comment" type="button">주석으로 삽입</button>
               <button class="btn bib" type="button">BibTeX 복사</button>
+              <button class="btn primary glossary-save" type="button">용어집에 저장 → 통일</button>
               <button class="btn copy" type="button">복사</button>
               <button class="btn retry" type="button">다시 생성</button>
+            </div>
+            <div class="pkg-prompt" hidden>
+              <span class="pkg-msg"></span>
+              <div class="row"><span class="grow"></span><button class="btn sm primary pkg-add" type="button">프리앰블에 추가</button><button class="btn sm pkg-copy" type="button">줄 복사</button><button class="btn sm pkg-dismiss" type="button">나중에</button></div>
             </div>
           </div>
         </div>
         <footer>
+          <label class="ac" title="자동: 입력을 멈추면 회색 제안 표시 · 수동: ${ALT}+\\ 로 요청 · Tab 수락, ${MOD}→ 단어 수락, Esc 닫기">자동완성
+            <select class="ac-mode" aria-label="자동완성">
+              <option value="auto">자동</option>
+              <option value="manual">수동 (${ALT}+\\)</option>
+              <option value="off">끔</option>
+            </select>
+          </label>
           <span><kbd>${ALT}</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> 빠른 실행</span>
-          <span><code>% ai: 지시</code> 줄에서 실행하면 그 자리에 작성</span>
+          <span><code>% ai: 지시</code> 줄에서 실행</span>
         </footer>
       </section>
       <div class="toast" role="status" hidden></div>
@@ -169,6 +183,8 @@
     allOn: $('.all-on'), allOff: $('.all-off'), diff: $('.diff'), out: $('.out'), variants: $('.variants'), report: $('.report'),
     resultActions: $('.result-actions'), applyBtn: $('.apply'), afterBtn: $('.after'), commentBtn: $('.comment'),
     bibBtn: $('.bib'), copyBtn: $('.copy'), retryBtn: $('.retry'), toast: $('.toast'),
+    glossaryBtn: $('.glossary-save'), pkgPrompt: $('.pkg-prompt'), pkgMsg: $('.pkg-msg'), pkgAdd: $('.pkg-add'),
+    pkgCopy: $('.pkg-copy'), pkgDismiss: $('.pkg-dismiss'), acMode: $('.ac-mode'),
   };
   ui.body.style.position = 'relative';
 
@@ -181,6 +197,8 @@
 
   function onSettingsChanged() {
     ui.launcher.hidden = !settings.showLauncher || !ui.panel.hidden;
+    ui.acMode.value = settings.autocomplete || 'auto';
+    if (settings.autocomplete === 'off') { cancelCompletion(); mw('ghostHide').catch(() => {}); }
     renderModelBar();
     renderCats();
     renderActions();
@@ -332,7 +350,17 @@
       ui.actions.appendChild(b);
     }
     ui.lintView.hidden = !(currentCat === 'check' && !q);
-    if (!ui.lintView.hidden) renderLint();
+    for (const b of ui.actions.querySelectorAll('.chip')) {
+      const a = allActions().find((x) => x.id === b.dataset.id);
+      if (a && ['lint', 'terms', 'packages'].includes(a.kind)) b.classList.toggle('on', !ui.lintView.hidden && a.kind === checkMode);
+    }
+    if (!ui.lintView.hidden) renderCheckView();
+  }
+
+  function renderCheckView() {
+    if (checkMode === 'terms') renderTermsView();
+    else if (checkMode === 'packages') renderPackagesView();
+    else renderLint();
   }
 
   ui.actions.addEventListener('click', (e) => {
@@ -343,7 +371,18 @@
   });
 
   function runAction(a, opts = {}) {
-    if (a.kind === 'lint') { lintTick(true).then(() => { currentCat = 'check'; renderCats(); renderActions(); toast(`로컬 점검: ${lintIssues.length}건`); }); return; }
+    if (a.kind === 'lint' || a.kind === 'terms' || a.kind === 'packages') {
+      checkMode = a.kind;
+      currentCat = 'check';
+      searchQuery = '';
+      ui.search.value = '';
+      lintTick(true).then(() => {
+        if (a.kind === 'terms') analyzeTermsNow();
+        renderCats();
+        renderActions();
+      });
+      return;
+    }
     if (a.kind === 'fix') { runFix(a); return; }
     start({ action: a, extra: ui.instr.value, autoApply: !!opts.autoApply });
   }
@@ -352,6 +391,7 @@
 
   let lintIssues = [];
   let lintDoc = null;
+  let checkMode = 'lint';
   const lintFilter = { error: true, warn: true, info: false };
 
   async function lintTick(force = false) {
@@ -360,9 +400,10 @@
     try { r = await mw('getDoc', {}, 3000); } catch { return; }
     if (!force && r.doc === lintDoc) return;
     lintDoc = r.doc;
-    try { lintIssues = L.lintLatex(r.doc); } catch { lintIssues = []; }
+    try { lintIssues = [...L.lintLatex(r.doc), ...K.asIssues(K.analyze(r.doc))].sort((a, b) => a.line - b.line); } catch { lintIssues = []; }
     updateLintBadges();
-    if (!ui.lintView.hidden) renderLint();
+    if (!ui.lintView.hidden && checkMode === 'lint') renderLint();
+    if (!ui.lintView.hidden && checkMode === 'packages') renderPackagesView();
   }
   setInterval(() => lintTick(false), 5000);
   setTimeout(() => lintTick(false), 2500);
@@ -404,16 +445,133 @@
     }
   }
 
+  // ---- 용어 통일 (term unification)
+
+  const termState = { groups: [], choices: new Map(), include: new Set() };
+  const SOURCE_LABEL = { glossary: '용어집', hyphen: '하이픈 혼용', usuk: '영/미 철자' };
+
+  function analyzeTermsNow() {
+    if (lintDoc == null) return;
+    try { termState.groups = T.analyzeTerms(lintDoc, profile.terms || ''); } catch { termState.groups = []; }
+    termState.choices = new Map(termState.groups.map((g) => [g.id, g.preferred]));
+    termState.include = new Set(termState.groups.filter((g) => g.confidence !== 'low').map((g) => g.id));
+  }
+
+  function termPlan() {
+    const chosen = new Map([...termState.choices].filter(([id]) => termState.include.has(id)));
+    return T.planChanges(termState.groups, chosen);
+  }
+
+  function renderTermsView() {
+    const nGloss = T.parseGlossary(profile.terms || '').length;
+    const groups = termState.groups;
+    const plan = termPlan();
+    const esc = M.escapeHtml;
+    ui.lintView.innerHTML = `
+      <div class="lint-head">
+        <span>용어집 ${nGloss}개 · 통일할 그룹 ${groups.length}개</span>
+        <span class="grow"></span>
+        <button class="btn sm edit-glossary" type="button">용어집 편집</button>
+        <button class="btn sm reterms" type="button">다시 분석</button>
+      </div>
+      ${groups.length ? '' : `<p class="hint">통일할 용어 변형이 없습니다. "논문 정보 → 용어집"에 <code>쓸 용어 | 피할 표현, …</code> 을 적거나, "용어집 제안 (AI)"로 후보를 받아 저장하세요.</p>`}
+      <div class="term-list">${groups.map((g) => `
+        <div class="term-group" data-id="${esc(g.id)}">
+          <label class="term-head"><input type="checkbox" data-include ${termState.include.has(g.id) ? 'checked' : ''}><span class="src">${SOURCE_LABEL[g.source]}</span><span class="hint">${g.confidence === 'low' ? '명사 앞 수식어면 하이픈이 맞을 수 있어 기본 해제' : '통일할 형태 선택'}</span></label>
+          <div class="forms">${g.forms.map((f) => `
+            <label class="form"><input type="radio" name="t-${esc(g.id)}" value="${esc(f.text)}" ${termState.choices.get(g.id) === f.text ? 'checked' : ''}>
+              <span>${esc(f.text)}</span><span class="cnt">×${f.count}</span>
+              ${f.count ? `<button class="jump" type="button" data-line="${f.occurrences[0].line}" title="첫 위치로 이동">L${f.occurrences[0].line}</button>` : ''}
+            </label>`).join('')}
+          </div>
+        </div>`).join('')}
+      </div>
+      ${groups.length ? `<div class="row"><span class="hint">한 번의 ${MOD}+Z 로 모두 되돌릴 수 있습니다</span><span class="grow"></span><button class="btn primary terms-apply" type="button" ${plan.length ? '' : 'disabled'}>선택한 그룹 통일 (${plan.length}곳)</button></div>` : ''}`;
+  }
+
+  async function applyTerms() {
+    const plan = termPlan();
+    if (!plan.length) return;
+    try {
+      await mw('applyChanges', { changes: plan });
+      toast(`용어 ${plan.length}곳을 통일했습니다`);
+    } catch (e) {
+      toast(e.message === 'TARGET_CHANGED' ? '그 사이 문서가 바뀌었습니다. 다시 분석한 뒤 적용하세요.' : explain(e.message));
+    }
+    await lintTick(true);
+    analyzeTermsNow();
+    renderTermsView();
+  }
+
+  // ---- 필요한 패키지 (missing packages)
+
+  function packageSelection(listEl) {
+    return [...listEl.querySelectorAll('input[data-pkg]:checked')].map((cb) => ({ kind: cb.dataset.kind, name: cb.dataset.pkg }));
+  }
+
+  function renderPackagesView() {
+    if (lintDoc == null) { ui.lintView.innerHTML = '<p class="hint">분석 중…</p>'; return; }
+    const r = K.analyze(lintDoc);
+    const esc = M.escapeHtml;
+    ui.lintView.innerHTML = `
+      <div class="lint-head">
+        <span>${r.hasPreamble ? `프리앰블: 이 파일${r.docClass ? ` (${esc(r.docClass)})` : ''}` : '이 파일에는 프리앰블이 없습니다 — 메인 파일에 추가하세요'}</span>
+        <span class="grow"></span>
+        <button class="btn sm repkg" type="button">다시 분석</button>
+      </div>
+      ${r.missing.length ? `<ul class="lint-list pkg-list">${r.missing.map((m) => `
+        <li class="pkg-item"><label><input type="checkbox" data-pkg="${esc(m.name)}" data-kind="${m.kind}" checked>
+          <code>${m.kind === 'tikzlib' ? `\\usetikzlibrary{${esc(m.name)}}` : `\\usepackage{${esc(m.name)}}`}</code></label>
+          <span class="hint">${esc(m.why)}</span>${m.line ? `<button class="jump" type="button" data-line="${m.line}">L${m.line}</button>` : ''}</li>`).join('')}</ul>
+        <div class="row"><span class="hint">학회 템플릿(.sty/.cls)이 이미 불러온 패키지는 제외하세요</span><span class="grow"></span>
+          <button class="btn sm pkg-lines" type="button">줄 복사</button>
+          <button class="btn primary pkg-insert" type="button" ${r.hasPreamble ? '' : 'disabled'}>프리앰블에 추가</button></div>`
+        : '<p class="hint">본문에 필요한 패키지가 모두 불러와져 있습니다 ✓</p>'}`;
+  }
+
+  async function insertPackages(items) {
+    if (!items.length) return false;
+    let r;
+    try { r = await mw('getDoc', {}, 3000); } catch (e) { toast(explain(e.message)); return false; }
+    const edits = K.insertionEdits(r.doc, items);
+    if (!edits) {
+      copyText(K.preambleLines(items).join('\n'));
+      toast('이 파일에 프리앰블이 없어 줄을 복사했습니다. 메인 파일에 붙여넣으세요.');
+      return false;
+    }
+    const maxPos = Math.max(...edits.map((e) => e.pos));
+    try {
+      await mw('insertAt', { edits, anchor: r.doc.slice(0, maxPos) });
+      toast(`프리앰블에 ${items.length}개 추가했습니다`);
+      await lintTick(true);
+      return true;
+    } catch (e) {
+      toast(explain(e.message));
+      return false;
+    }
+  }
+
   ui.lintView.addEventListener('click', (e) => {
-    const li = e.target.closest('li[data-line]');
-    if (li) { mw('selectLines', { line: Number(li.dataset.line) }).catch(() => {}); return; }
+    const jump = e.target.closest('button.jump, li[data-line]');
+    if (jump) { mw('selectLines', { line: Number(jump.dataset.line) }).catch(() => {}); return; }
     if (e.target.closest('.relint')) lintTick(true);
+    else if (e.target.closest('.reterms')) lintTick(true).then(() => { analyzeTermsNow(); renderTermsView(); });
+    else if (e.target.closest('.repkg')) lintTick(true).then(renderPackagesView);
+    else if (e.target.closest('.edit-glossary')) { ui.profile.open = true; ui.profile.querySelector('[data-f="terms"]').focus(); }
+    else if (e.target.closest('.terms-apply') && e.isTrusted) applyTerms();
+    else if (e.target.closest('.pkg-insert') && e.isTrusted) insertPackages(packageSelection(ui.lintView));
+    else if (e.target.closest('.pkg-lines')) copyText(K.preambleLines(packageSelection(ui.lintView)).join('\n'));
   });
   ui.lintView.addEventListener('change', (e) => {
     const cb = e.target.closest('input[data-sev]');
-    if (!cb) return;
-    lintFilter[cb.dataset.sev] = cb.checked;
-    renderLint();
+    if (cb) { lintFilter[cb.dataset.sev] = cb.checked; renderLint(); return; }
+    const group = e.target.closest('.term-group');
+    if (group) {
+      const id = group.dataset.id;
+      if (e.target.matches('[data-include]')) { if (e.target.checked) termState.include.add(id); else termState.include.delete(id); }
+      if (e.target.type === 'radio') termState.choices.set(id, e.target.value);
+      renderTermsView();
+    }
   });
 
   // --------------------------------------------------------- paper profile ---
@@ -611,7 +769,7 @@
   }
 
   function hideResultParts() {
-    for (const el of [ui.errDetail, ui.explain, ui.tabs, ui.diffBar, ui.diff, ui.out, ui.variants, ui.report, ui.resultActions]) el.hidden = true;
+    for (const el of [ui.errDetail, ui.explain, ui.tabs, ui.diffBar, ui.diff, ui.out, ui.variants, ui.report, ui.resultActions, ui.pkgPrompt]) el.hidden = true;
   }
 
   function scrollToResult() {
@@ -795,6 +953,8 @@
     ui.afterBtn.hidden = !btns.after;
     ui.commentBtn.hidden = !btns.comment;
     ui.bibBtn.hidden = !btns.bib;
+    ui.glossaryBtn.hidden = !(run.output === 'report' && run.action.glossary && M.codeBlocks(run.report, 'glossary').length);
+    ui.pkgPrompt.hidden = true;
     ui.copyBtn.hidden = !btns.copy;
     ui.retryBtn.hidden = !btns.retry;
     ui.applyBtn.disabled = false;
@@ -944,12 +1104,48 @@
       toast('Overleaf 문서에 적용했습니다');
       setTimeout(refreshTarget, 50);
       setTimeout(() => lintTick(true), 300);
+      checkPackagesFor(args.text);
       return true;
     } catch (e) {
       showError(e.message);
       return false;
     }
   }
+
+  // After AI text lands in the document, ask to add any \usepackage it needs (기입 요청).
+  let pkgPending = [];
+  async function checkPackagesFor(text) {
+    ui.pkgPrompt.hidden = true;
+    let r;
+    try { r = await mw('getDoc', {}, 3000); } catch { return; }
+    const res = K.analyze(r.doc, text);
+    pkgPending = res.missing;
+    if (!pkgPending.length) return;
+    const names = pkgPending.map((m) => (m.kind === 'tikzlib' ? `TikZ ${m.name}` : m.name)).join(', ');
+    ui.pkgMsg.innerHTML = res.hasPreamble
+      ? `이 결과에는 프리앰블에 없는 패키지가 필요합니다: <b>${M.escapeHtml(names)}</b>. 추가할까요?`
+      : `이 결과에는 <b>${M.escapeHtml(names)}</b> 가 필요합니다. 이 파일에는 프리앰블이 없으니 메인 파일에 다음 줄을 추가하세요:<br><code>${M.escapeHtml(K.preambleLines(pkgPending).join('  '))}</code>`;
+    ui.pkgAdd.hidden = !res.hasPreamble;
+    ui.pkgPrompt.hidden = false;
+    scrollToResult();
+  }
+  ui.pkgAdd.addEventListener('click', async (e) => {
+    if (!e.isTrusted) return;
+    if (await insertPackages(pkgPending)) ui.pkgPrompt.hidden = true;
+  });
+  ui.pkgCopy.addEventListener('click', () => copyText(K.preambleLines(pkgPending).join('\n')));
+  ui.pkgDismiss.addEventListener('click', () => { ui.pkgPrompt.hidden = true; });
+
+  // Save an AI-suggested glossary into the paper profile, then open the unification view.
+  ui.glossaryBtn.addEventListener('click', () => {
+    const block = M.codeBlocks(current?.report || '', 'glossary').join('\n');
+    if (!block.trim()) return;
+    profile.terms = T.mergeGlossary(profile.terms || '', block);
+    chrome.storage.local.set({ [PROFILE_KEY]: profile }).catch(() => {});
+    renderProfile();
+    toast(`용어집에 ${T.parseGlossary(block).length}개 항목을 저장했습니다`);
+    runAction({ kind: 'terms' });
+  });
 
   async function apply(position) {
     const run = current;
@@ -1108,6 +1304,104 @@
     const action = allActions().find((a) => a.id === settings.quickActionId) || C.ACTIONS[0];
     return runAction(action, { autoApply });
   }
+
+  // ---------------------------------------------------------- autocomplete ---
+  // Trusted keystrokes in the editor arm a timer; after a pause we ask Claude (fast model, no tools)
+  // for a continuation and stream it into a ghost overlay drawn by the main-world script.
+
+  const AC = { timer: 0, run: null, seq: 0, accepted: 0 };
+  const AC_BLOCK_TEXT = {
+    'not-focused': '에디터에 커서가 없습니다', selection: '선택 영역이 있습니다', composing: '한글 조합 중입니다',
+    preamble: '프리앰블에서는 동작하지 않습니다', 'mid-line': '줄 끝에서만 동작합니다', comment: '주석 안입니다',
+    'typing-command': 'LaTeX 명령을 입력하는 중입니다', 'inline-math': '수식 안입니다', 'math-env': '수식 환경 안입니다', 'display-math': '수식 안입니다',
+  };
+  const acMode = () => settings.autocomplete || 'auto';
+  const inEditor = (t) => !!(t && t.closest && t.closest('.cm-content'));
+
+  function cancelCompletion() {
+    const r = AC.run;
+    if (r && !r.done) {
+      r.done = true;
+      try { r.port?.postMessage({ type: 'cancel' }); r.port?.disconnect(); } catch { /* ignore */ }
+    }
+    AC.run = null;
+  }
+
+  async function showGhostText(run, text) {
+    if (AC.run !== run && !run.done) return;
+    let ok = false;
+    try { ok = await mw('ghostShow', { text, head: run.ctx.head, docLength: run.ctx.docLength }, 2000); } catch { ok = false; }
+    if (!ok && AC.run === run) cancelCompletion();
+  }
+
+  async function triggerCompletion({ manual }) {
+    if (!chrome.runtime?.id || acMode() === 'off') return;
+    if (cliInfo && cliInfo.claude && !cliInfo.claude.ok) { if (manual) toast('자동완성에는 claude CLI 가 필요합니다'); return; }
+    let ctx;
+    try { ctx = await mw('completionContext', {}, 2000); } catch { return; }
+    const reason = P.completionBlocker(ctx, { manual });
+    if (reason) { if (manual) toast(`자동완성: ${AC_BLOCK_TEXT[reason] || reason}`); return; }
+    cancelCompletion();
+    const request = P.buildCompletionRequest({ settings, before: ctx.before, after: ctx.after, fileName: ctx.fileName, profile });
+    const run = { id: ++AC.seq, ctx, raw: '', final: null, port: null, done: false, manual };
+    AC.run = run;
+    if (manual) toast('자동완성 요청 중…', 1500);
+    let port;
+    try { port = chrome.runtime.connect({ name: 'olai-run' }); } catch { AC.run = null; return; }
+    run.port = port;
+    port.onMessage.addListener((m) => {
+      if (AC.run !== run || run.done || !m) return;
+      if (m.type === 'delta') {
+        run.raw += m.text;
+        const t = P.postProcessCompletion(run.raw, ctx.before);
+        if (t) showGhostText(run, t);
+      } else if (m.type === 'final-chunk') {
+        run.final = (run.final || '') + m.text;
+      } else if (m.type === 'done') {
+        run.done = true;
+        try { port.disconnect(); } catch { /* ignore */ }
+        const t = P.postProcessCompletion(run.final ?? run.raw, ctx.before);
+        if (t) showGhostText(run, t); else { mw('ghostHide').catch(() => {}); if (manual) toast('제안할 내용이 없습니다'); }
+      } else if (m.type === 'error') {
+        run.done = true;
+        try { port.disconnect(); } catch { /* ignore */ }
+        if (manual) toast(`자동완성 실패: ${explain(m.error, m.detail)}`);
+      }
+    });
+    port.onDisconnect.addListener(() => { if (AC.run === run) run.done = true; });
+    port.postMessage({ type: 'run', request });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (!e.isTrusted || !inEditor(e.target)) return;
+    if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === 'Backslash') {
+      if (acMode() === 'off') return;
+      e.preventDefault();
+      e.stopPropagation();
+      clearTimeout(AC.timer);
+      triggerCompletion({ manual: true });
+      return;
+    }
+    if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(e.key)) return;
+    cancelCompletion();
+    clearTimeout(AC.timer);
+    if (acMode() !== 'auto') return;
+    if (e.key === 'Tab' || e.key === 'Escape' || e.key.startsWith('Arrow') || e.key.startsWith('Page') || e.key === 'Home' || e.key === 'End' || e.metaKey || e.ctrlKey) return;
+    AC.timer = setTimeout(() => triggerCompletion({ manual: false }), Math.max(300, Number(settings.acDelayMs) || 1200));
+  }, true);
+  document.addEventListener('mousedown', (e) => { if (inEditor(e.target)) { clearTimeout(AC.timer); cancelCompletion(); } }, true);
+
+  // Hints from the main world (treated as untrusted: they can only cancel work).
+  window.addEventListener('message', (e) => {
+    if (e.source !== window || !e.data || e.data.channel !== 'olai:mw-event') return;
+    if (e.data.type === 'ghost-hidden') cancelCompletion();
+    if (e.data.type === 'ghost-accepted') { AC.accepted += 1; setTimeout(() => lintTick(false), 500); }
+  });
+
+  ui.acMode.addEventListener('change', () => {
+    saveSetting('autocomplete', ui.acMode.value);
+    toast(ui.acMode.value === 'auto' ? '자동완성: 입력을 멈추면 제안합니다 (Tab 수락)' : ui.acMode.value === 'manual' ? `자동완성: ${ALT}+\\ 로 요청합니다` : '자동완성을 껐습니다');
+  });
 
   // Keyboard commands are delivered by the background worker (chrome.commands).
   chrome.runtime.onMessage.addListener((msg) => {

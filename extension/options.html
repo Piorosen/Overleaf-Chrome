@@ -69,7 +69,7 @@
       <label>추가 작성 규칙 (모든 요청의 시스템 프롬프트에 덧붙임)
         <textarea id="styleGuide" rows="3" placeholder="예: American English 사용. 1인칭 복수(we). 약어는 처음 등장 시 풀어쓰기."></textarea>
       </label>
-      <label>사용자 프리셋 — 한 줄에 하나씩 <code>라벨 | 지시문 | 종류</code> (종류: transform 기본, generate, compose, report)
+      <label><span>사용자 프리셋 — 한 줄에 하나씩 <code>라벨 | 지시문 | 종류</code> (종류: transform 기본, generate, compose, report)</span>
         <textarea id="customPresets" rows="4" placeholder="리뷰어 톤 | Rewrite as a polite, precise response to a peer reviewer.&#10;150단어 초록 | Write a 150-word abstract of the paper. | compose&#10;약점 3개 | List the three biggest weaknesses of this section. | report"></textarea>
       </label>
       <div class="grid">
@@ -89,6 +89,32 @@
       <label class="check"><input id="includeFullDoc" type="checkbox"> 항상 현재 파일 전체를 문맥으로 보내기 (정확도↑, 속도·비용↑)</label>
       <label class="check"><input id="allowWeb" type="checkbox"> 문헌 기능에 웹 검색 허용 (Claude 전용 · WebSearch/WebFetch 도구만 켬)</label>
       <label class="check"><input id="autoLint" type="checkbox"> 입력하는 동안 로컬 점검 자동 실행 (AI 호출 없음 · 버튼에 오류·경고 개수 표시)</label>
+    </section>
+
+    <section class="card">
+      <h2>자동완성 <span class="muted">(회색 제안 · <kbd>Tab</kbd> 수락 · <kbd>⌘/Ctrl</kbd>+<kbd>→</kbd> 단어 수락 · <kbd>Esc</kbd> 닫기)</span></h2>
+      <div class="grid">
+        <label>동작
+          <select id="autocomplete">
+            <option value="auto">자동 — 입력을 멈추면 제안</option>
+            <option value="manual">수동 — Alt(⌥)+\ 로 요청</option>
+            <option value="off">끔</option>
+          </select>
+        </label>
+        <label>모델 (속도가 중요해 Haiku 5.5 권장)
+          <select id="acModel"></select>
+        </label>
+        <label>사고 수준
+          <select id="acEffort"></select>
+        </label>
+        <label>멈춘 뒤 대기 시간 (ms)
+          <input id="acDelayMs" type="number" min="300" max="5000" step="100">
+        </label>
+        <label>최대 단어 수
+          <input id="acMaxWords" type="number" min="5" max="80" step="5">
+        </label>
+      </div>
+      <p class="muted">자동완성은 백엔드 설정과 관계없이 Claude CLI 로 실행됩니다(도구 없이 텍스트만 생성). 줄 끝에서만 동작하고, 주석·수식·프리앰블·LaTeX 명령을 입력하는 중에는 쉽니다. 한 번 제안할 때마다 CLI 요청이 하나 발생합니다.</p>
     </section>
 
     <section class="card">
