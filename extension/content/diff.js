@@ -79,7 +79,43 @@
     return { ins, del };
   }
 
-  const api = { tokenize, diffWords, renderDiffHtml, diffStats, escapeHtml };
+  // Group diff parts into hunks: unchanged text, or a change (del + ins) that can be accepted or rejected.
+  // Whitespace-only equal runs between two changes are merged into the change so hunks stay readable.
+  function toHunks(parts) {
+    const hunks = [];
+    for (let k = 0; k < parts.length; k++) {
+      const p = parts[k];
+      const last = hunks[hunks.length - 1];
+      if (p.op === 'eq') {
+        const next = parts[k + 1];
+        if (last && last.type === 'chg' && /^\s+$/.test(p.text) && p.text.length <= 2 && next && next.op !== 'eq') {
+          last.del += p.text;
+          last.ins += p.text;
+          continue;
+        }
+        hunks.push({ type: 'eq', text: p.text });
+      } else {
+        const h = last && last.type === 'chg' ? last : (hunks.push({ type: 'chg', del: '', ins: '', accepted: true }), hunks[hunks.length - 1]);
+        if (p.op === 'del') h.del += p.text; else h.ins += p.text;
+      }
+    }
+    return hunks;
+  }
+
+  function composeHunks(hunks) {
+    return hunks.map((h) => (h.type === 'eq' ? h.text : (h.accepted ? h.ins : h.del))).join('');
+  }
+
+  function renderHunksHtml(hunks) {
+    return hunks.map((h, i) => {
+      if (h.type === 'eq') return escapeHtml(h.text);
+      const del = h.del ? `<del>${escapeHtml(h.del)}</del>` : '';
+      const ins = h.ins ? `<ins>${escapeHtml(h.ins)}</ins>` : '';
+      return `<span class="chg${h.accepted ? '' : ' off'}" data-i="${i}" title="클릭: 이 변경 ${h.accepted ? '취소' : '다시 적용'}">${del}${ins}</span>`;
+    }).join('');
+  }
+
+  const api = { tokenize, diffWords, renderDiffHtml, diffStats, escapeHtml, toHunks, composeHunks, renderHunksHtml };
   root.OLAI_DIFF = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

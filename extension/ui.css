@@ -72,7 +72,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .conn p { margin: 0 0 6px; }
 .conn ul { margin: 0; padding-left: 18px; }
 .conn li.ok, .conn.good { color: var(--good); }
-.conn li.bad { color: var(--bad); }
+.conn li.bad, .conn .bad { color: var(--bad); }
 .conn.bad { color: var(--bad); background: var(--bad-bg); padding: 8px 10px; border-radius: 8px; }
 details { margin-top: 12px; }
 summary { cursor: pointer; color: var(--muted); }

@@ -9,7 +9,7 @@
 <body>
   <main class="page">
     <h1><span class="spark" aria-hidden="true">✦</span> Overleaf AI 설정</h1>
-    <p class="lead">overleaf.com 프로젝트 페이지에서만 동작합니다. 글 생성은 이 컴퓨터에 설치된 <code>claude</code> 또는 <code>codex</code> CLI 가 수행합니다.</p>
+    <p class="lead">overleaf.com 프로젝트 페이지에서만 동작합니다. 글 생성은 이 컴퓨터에 설치된 <code>claude</code> 또는 <code>codex</code> CLI 가 수행합니다. 모델과 사고 수준은 Overleaf 패널 상단에서도 바로 바꿀 수 있습니다.</p>
 
     <section class="card">
       <h2>연결 상태</h2>
@@ -29,7 +29,7 @@
     </section>
 
     <section class="card">
-      <h2>AI 백엔드</h2>
+      <h2>AI 백엔드와 모델</h2>
       <div class="seg" role="radiogroup" aria-label="백엔드">
         <label><input type="radio" name="backend" value="claude"> Claude Code CLI</label>
         <label><input type="radio" name="backend" value="codex"> OpenAI Codex CLI (ChatGPT)</label>
@@ -37,64 +37,63 @@
 
       <div class="grid">
         <label>Claude 모델
-          <input id="claudeModel" list="claude-models" placeholder="비우면 CLI 기본값">
-          <datalist id="claude-models">
-            <option value="sonnet"></option>
-            <option value="opus"></option>
-            <option value="haiku"></option>
-          </datalist>
+          <select id="claudeModel"></select>
         </label>
-        <label>Claude effort
-          <select id="claudeEffort">
-            <option value="">기본값</option>
-            <option value="low">low</option>
-            <option value="medium">medium</option>
-            <option value="high">high</option>
-          </select>
+        <label>Claude 사고 수준 (effort)
+          <select id="claudeEffort"></select>
         </label>
         <label>Codex 모델
-          <input id="codexModel" placeholder="비우면 codex 기본값 (예: gpt-5)">
+          <select id="codexModel"></select>
         </label>
-        <label>Codex reasoning effort
-          <select id="codexEffort">
-            <option value="">기본값</option>
-            <option value="minimal">minimal</option>
-            <option value="low">low</option>
-            <option value="medium">medium</option>
-            <option value="high">high</option>
-          </select>
+        <label>Codex 사고 수준 (reasoning effort)
+          <select id="codexEffort"></select>
+        </label>
+        <label>Claude 사용자 지정 모델 (한 줄에 하나)
+          <textarea id="claudeCustomModels" rows="2" placeholder="예: claude-opus-5-5[1m]"></textarea>
+        </label>
+        <label>Codex 사용자 지정 모델 (한 줄에 하나)
+          <textarea id="codexCustomModels" rows="2" placeholder="터미널에서 codex 실행 후 /model 로 확인한 이름"></textarea>
         </label>
         <label>Claude 추가 인자
-          <input id="claudeExtraArgs" placeholder='예: --fallback-model haiku'>
+          <input id="claudeExtraArgs" placeholder='예: --fallback-model claude-sonnet-5-5'>
         </label>
         <label>Codex 추가 인자
           <input id="codexExtraArgs" placeholder='예: -c model_verbosity="low"'>
         </label>
       </div>
+      <p class="muted"><b>자동</b> 사고 수준은 작업 종류에 맞춰 고릅니다: 교정·번역은 low, 작성·생성은 medium, 검토·오류 해결은 high. 모델이 지원하지 않는 단계는 가까운 단계로 바뀝니다.</p>
     </section>
 
     <section class="card">
       <h2>글쓰기</h2>
-      <label>추가 작성 규칙 (시스템 프롬프트에 덧붙임)
+      <label>추가 작성 규칙 (모든 요청의 시스템 프롬프트에 덧붙임)
         <textarea id="styleGuide" rows="3" placeholder="예: American English 사용. 1인칭 복수(we). 약어는 처음 등장 시 풀어쓰기."></textarea>
       </label>
-      <label>사용자 프리셋 — 한 줄에 하나씩 <code>라벨 | 지시문</code>
-        <textarea id="customPresets" rows="3" placeholder="리뷰어 톤 | Rewrite as a polite, precise response to a peer reviewer.&#10;초록 요약 | Summarize into a 150-word abstract."></textarea>
+      <label>사용자 프리셋 — 한 줄에 하나씩 <code>라벨 | 지시문 | 종류</code> (종류: transform 기본, generate, compose, report)
+        <textarea id="customPresets" rows="4" placeholder="리뷰어 톤 | Rewrite as a polite, precise response to a peer reviewer.&#10;150단어 초록 | Write a 150-word abstract of the paper. | compose&#10;약점 3개 | List the three biggest weaknesses of this section. | report"></textarea>
       </label>
       <div class="grid">
+        <label>검토·설명 결과 언어
+          <select id="explainLang">
+            <option value="ko">한국어</option>
+            <option value="en">English</option>
+          </select>
+        </label>
         <label>주변 문맥 길이 (앞·뒤 각 글자 수)
           <input id="contextChars" type="number" min="0" max="50000" step="500">
         </label>
-        <label>제한 시간 (초)
+        <label>제한 시간 (초, xhigh/max·웹 검색은 2배)
           <input id="timeoutSec" type="number" min="10" max="1800" step="10">
         </label>
       </div>
-      <label class="check"><input id="includeFullDoc" type="checkbox"> 현재 파일 전체를 문맥으로 보내기 (정확도↑, 속도·비용↑)</label>
+      <label class="check"><input id="includeFullDoc" type="checkbox"> 항상 현재 파일 전체를 문맥으로 보내기 (정확도↑, 속도·비용↑)</label>
+      <label class="check"><input id="allowWeb" type="checkbox"> 문헌 기능에 웹 검색 허용 (Claude 전용 · WebSearch/WebFetch 도구만 켬)</label>
+      <label class="check"><input id="autoLint" type="checkbox"> 입력하는 동안 로컬 점검 자동 실행 (AI 호출 없음 · 버튼에 오류·경고 개수 표시)</label>
     </section>
 
     <section class="card">
       <h2>빠른 실행 <span class="muted">(<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd>)</span></h2>
-      <label>선택 영역/현재 문단에 실행할 프리셋
+      <label>선택 영역/현재 문단에 실행할 기능
         <select id="quickActionId"></select>
       </label>
       <label class="check"><input id="autoApplyQuick" type="checkbox"> 미리보기 없이 바로 적용 (<kbd>⌘/Ctrl</kbd>+<kbd>Z</kbd> 로 되돌리기 가능)</label>
@@ -104,6 +103,7 @@
 
     <p id="saved" class="saved" aria-live="polite"></p>
   </main>
+  <script src="content/catalog.js"></script>
   <script src="content/prompts.js"></script>
   <script src="options.js"></script>
 </body>

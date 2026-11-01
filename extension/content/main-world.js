@@ -188,6 +188,21 @@
       v.focus();
       return true;
     },
+    // Select whole lines (1-based, inclusive) and scroll them into view.
+    selectLines({ line, end }) {
+      const v = requireView();
+      const doc = v.state.doc;
+      const a = Math.max(1, Math.min(Number(line) || 1, doc.lines));
+      const b = Math.max(a, Math.min(Number(end) || a, doc.lines));
+      v.dispatch({ selection: { anchor: doc.line(a).from, head: doc.line(b).to }, scrollIntoView: true });
+      v.focus();
+      return true;
+    },
+    // Plain document text, for local checks while typing.
+    getDoc() {
+      const v = requireView();
+      return { doc: v.state.doc.toString(), fileName: currentFileName() };
+    },
     focus() {
       requireView().focus();
       return true;
