@@ -12,7 +12,8 @@
  * Requests from the extension:
  *   { type: "ping" }
  *   { type: "run", backend: "claude"|"codex", system, prompt,
- *     model?, effort?, timeoutSec?, extraArgs?: string[] }
+ *     model?, effort?, timeoutSec?, extraArgs?: string[], web?: boolean }
+ *   web: Claude only — enables exactly the WebSearch and WebFetch tools (no file/shell tools).
  *
  * Messages to the extension:
  *   { type: "pong", ... }                      (reply to ping)
@@ -31,7 +32,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const HOST_VERSION = '0.1.0';
+const HOST_VERSION = '0.2.0';
 const MAX_OUT_MSG = 256 * 1024; // keep every message far below Chrome's 1 MB host->extension cap
 const WORKDIR = path.join(os.tmpdir(), 'overleaf-ai-host');
 
@@ -138,9 +139,33 @@ function versionOf(name) {
   });
 }
 
+// Default model/effort configured in each CLI's own settings (shown as "기본값" in the UI).
+function cliDefaults() {
+  const out = { claude: {}, codex: {} };
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'));
+    if (typeof j.model === 'string') out.claude.model = j.model;
+    if (typeof j.effortLevel === 'string') out.claude.effort = j.effortLevel;
+  } catch { /* no settings */ }
+  try {
+    const toml = fs.readFileSync(path.join(os.homedir(), '.codex', 'config.toml'), 'utf8');
+    const top = toml.split(/^\s*\[/m)[0]; // only top-level keys, before the first [table]
+    const model = /^\s*model\s*=\s*"([^"]+)"/m.exec(top);
+    const effort = /^\s*model_reasoning_effort\s*=\s*"([^"]+)"/m.exec(top);
+    if (model) out.codex.model = model[1];
+    if (effort) out.codex.effort = effort[1];
+  } catch { /* no config */ }
+  return out;
+}
+
 async function ping() {
   const [claude, codex] = await Promise.all([versionOf('claude'), versionOf('codex')]);
-  return { type: 'pong', hostVersion: HOST_VERSION, node: process.version, platform: process.platform, claude, codex };
+  const defaults = cliDefaults();
+  return {
+    type: 'pong', hostVersion: HOST_VERSION, node: process.version, platform: process.platform,
+    claude: { ...claude, defaults: defaults.claude },
+    codex: { ...codex, defaults: defaults.codex },
+  };
 }
 
 const SAFE_ARG = /^[\w.:\/\[\]@=-]{1,100}$/;
@@ -152,13 +177,14 @@ function run(req) {
   if (typeof req.prompt !== 'string' || !req.prompt.trim()) return send({ type: 'error', error: 'EMPTY_PROMPT' });
   const system = typeof req.system === 'string' ? req.system : '';
   const model = typeof req.model === 'string' && SAFE_ARG.test(req.model) ? req.model : '';
-  const effort = typeof req.effort === 'string' && /^(minimal|low|medium|high|xhigh|max)$/.test(req.effort) ? req.effort : '';
+  const effort = typeof req.effort === 'string' && /^(none|minimal|low|medium|high|xhigh|max)$/.test(req.effort) ? req.effort : '';
+  const web = req.web === true && backend === 'claude';
   const extra = Array.isArray(req.extraArgs) ? req.extraArgs.filter((a) => typeof a === 'string' && a.length < 500) : [];
   const timeoutSec = Math.min(Math.max(Number(req.timeoutSec) || 180, 10), 1800);
 
   const started = Date.now();
   const spec = backend === 'claude'
-    ? claudeSpec({ system, model, effort, extra })
+    ? claudeSpec({ system, model, effort, extra, web })
     : codexSpec({ model, effort, extra });
   const stdinText = backend === 'claude' ? req.prompt : `${system}\n\n${req.prompt}`;
 
@@ -225,13 +251,15 @@ function childEnv() {
 
 // ------------------------------------------------------------ claude CLI ---
 
-function claudeSpec({ system, model, effort, extra }) {
+function claudeSpec({ system, model, effort, extra, web }) {
   const args = [
     '-p',
     '--output-format', 'stream-json',
     '--verbose',
     '--include-partial-messages',
-    '--tools', '',               // pure text generation: no file/shell/web tools
+    // Pure text generation by default. Web actions get exactly WebSearch + WebFetch, pre-approved;
+    // file, shell and edit tools are never available.
+    ...(web ? ['--tools', 'WebSearch,WebFetch', '--allowedTools', 'WebSearch,WebFetch'] : ['--tools', '']),
     '--strict-mcp-config',       // skip MCP servers (faster start, no side effects)
     '--no-session-persistence',
     '--disable-slash-commands',
@@ -264,6 +292,10 @@ function claudeSpec({ system, model, effort, extra }) {
           try { ev = JSON.parse(line); } catch { nonJson.push(line); continue; }
           if (ev.type === 'stream_event') {
             const e = ev.event || {};
+            const block = e.type === 'content_block_start' ? e.content_block || {} : null;
+            if (block && /tool_use$/.test(block.type || '')) {
+              cb.status(block.name === 'WebFetch' ? '웹 페이지 확인 중…' : block.name === 'WebSearch' ? '웹 검색 중…' : `도구 사용: ${block.name}`);
+            }
             if (e.type === 'content_block_delta' && e.delta && e.delta.type === 'text_delta') {
               streamed += e.delta.text;
               cb.delta(e.delta.text);
