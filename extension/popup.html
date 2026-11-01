@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Overleaf AI</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="popup">
+  <h1><span class="spark" aria-hidden="true">✦</span> Overleaf AI</h1>
+  <div class="seg compact" role="radiogroup" aria-label="백엔드">
+    <label><input type="radio" name="backend" value="claude"> Claude</label>
+    <label><input type="radio" name="backend" value="codex"> Codex</label>
+  </div>
+  <div id="conn" class="conn">연결 확인 중…</div>
+  <p class="muted">Overleaf 프로젝트에서 <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> 로 패널을 엽니다.</p>
+  <div class="row">
+    <button id="options" class="btn" type="button">설정</button>
+    <a class="btn" href="https://www.overleaf.com/project" target="_blank" rel="noopener">Overleaf 열기</a>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

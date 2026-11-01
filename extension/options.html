@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Overleaf AI 설정</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body>
+  <main class="page">
+    <h1><span class="spark" aria-hidden="true">✦</span> Overleaf AI 설정</h1>
+    <p class="lead">overleaf.com 프로젝트 페이지에서만 동작합니다. 글 생성은 이 컴퓨터에 설치된 <code>claude</code> 또는 <code>codex</code> CLI 가 수행합니다.</p>
+
+    <section class="card">
+      <h2>연결 상태</h2>
+      <div id="conn" class="conn">확인 중…</div>
+      <div class="row">
+        <button id="test" class="btn" type="button">다시 확인</button>
+      </div>
+      <details id="setup">
+        <summary>로컬 브리지 설치 방법</summary>
+        <ol>
+          <li>터미널에서 저장소 폴더로 이동 후 <code>./scripts/install-host.sh</code> 실행</li>
+          <li><code>chrome://extensions</code> 에서 이 확장을 새로고침(⟳)</li>
+          <li>이 페이지에서 “다시 확인” 클릭</li>
+        </ol>
+        <p class="muted">확장 ID: <code id="ext-id"></code></p>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>AI 백엔드</h2>
+      <div class="seg" role="radiogroup" aria-label="백엔드">
+        <label><input type="radio" name="backend" value="claude"> Claude Code CLI</label>
+        <label><input type="radio" name="backend" value="codex"> OpenAI Codex CLI (ChatGPT)</label>
+      </div>
+
+      <div class="grid">
+        <label>Claude 모델
+          <input id="claudeModel" list="claude-models" placeholder="비우면 CLI 기본값">
+          <datalist id="claude-models">
+            <option value="sonnet"></option>
+            <option value="opus"></option>
+            <option value="haiku"></option>
+          </datalist>
+        </label>
+        <label>Claude effort
+          <select id="claudeEffort">
+            <option value="">기본값</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </label>
+        <label>Codex 모델
+          <input id="codexModel" placeholder="비우면 codex 기본값 (예: gpt-5)">
+        </label>
+        <label>Codex reasoning effort
+          <select id="codexEffort">
+            <option value="">기본값</option>
+            <option value="minimal">minimal</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </label>
+        <label>Claude 추가 인자
+          <input id="claudeExtraArgs" placeholder='예: --fallback-model haiku'>
+        </label>
+        <label>Codex 추가 인자
+          <input id="codexExtraArgs" placeholder='예: -c model_verbosity="low"'>
+        </label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>글쓰기</h2>
+      <label>추가 작성 규칙 (시스템 프롬프트에 덧붙임)
+        <textarea id="styleGuide" rows="3" placeholder="예: American English 사용. 1인칭 복수(we). 약어는 처음 등장 시 풀어쓰기."></textarea>
+      </label>
+      <label>사용자 프리셋 — 한 줄에 하나씩 <code>라벨 | 지시문</code>
+        <textarea id="customPresets" rows="3" placeholder="리뷰어 톤 | Rewrite as a polite, precise response to a peer reviewer.&#10;초록 요약 | Summarize into a 150-word abstract."></textarea>
+      </label>
+      <div class="grid">
+        <label>주변 문맥 길이 (앞·뒤 각 글자 수)
+          <input id="contextChars" type="number" min="0" max="50000" step="500">
+        </label>
+        <label>제한 시간 (초)
+          <input id="timeoutSec" type="number" min="10" max="1800" step="10">
+        </label>
+      </div>
+      <label class="check"><input id="includeFullDoc" type="checkbox"> 현재 파일 전체를 문맥으로 보내기 (정확도↑, 속도·비용↑)</label>
+    </section>
+
+    <section class="card">
+      <h2>빠른 실행 <span class="muted">(<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd>)</span></h2>
+      <label>선택 영역/현재 문단에 실행할 프리셋
+        <select id="quickActionId"></select>
+      </label>
+      <label class="check"><input id="autoApplyQuick" type="checkbox"> 미리보기 없이 바로 적용 (<kbd>⌘/Ctrl</kbd>+<kbd>Z</kbd> 로 되돌리기 가능)</label>
+      <label class="check"><input id="showLauncher" type="checkbox"> Overleaf 화면 오른쪽 아래에 AI 버튼 표시</label>
+      <p class="muted">단축키 변경: <code>chrome://extensions/shortcuts</code></p>
+    </section>
+
+    <p id="saved" class="saved" aria-live="polite"></p>
+  </main>
+  <script src="content/prompts.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
