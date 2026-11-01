@@ -30,8 +30,12 @@ fi
 # Chrome starts the host with a minimal PATH, so capture the user's login-shell PATH
 # (Homebrew, nvm, ~/.local/bin ...) and bake it into the launcher.
 USER_SHELL="${SHELL:-/bin/zsh}"
-USER_PATH="$("$USER_SHELL" -lic 'printf "__OLAI_PATH__%s\n" "$PATH"' 2>/dev/null | sed -n 's/^.*__OLAI_PATH__//p' | tail -n 1 || true)"
-[[ -z "$USER_PATH" ]] && USER_PATH="$PATH"
+# stdin from /dev/null and a 10 s limit so an rc file that prompts or hangs cannot block the installer.
+USER_PATH="$(perl -e 'alarm 10; exec @ARGV' "$USER_SHELL" -lic 'printf "__OLAI_PATH__%s\n" "$PATH"' </dev/null 2>/dev/null | sed -n 's/^.*__OLAI_PATH__//p' | tail -n 1 || true)"
+if [[ -z "$USER_PATH" ]]; then
+  echo "⚠ 로그인 셸에서 PATH 를 읽지 못해 현재 PATH 를 사용합니다." >&2
+  USER_PATH="$PATH"
+fi
 
 find_bin() { (PATH="$USER_PATH"; command -v "$1" 2>/dev/null || true); }
 
@@ -44,9 +48,20 @@ if [[ -z "$NODE_BIN" ]]; then
   exit 1
 fi
 
+NODE_MAJOR="$("$NODE_BIN" -p 'process.versions.node.split(".")[0]')"
+if [[ "$NODE_MAJOR" -lt 18 ]]; then
+  echo "✗ Node.js 18 이상이 필요합니다 (현재 $("$NODE_BIN" --version))." >&2
+  exit 1
+fi
 echo "• node   : $NODE_BIN ($("$NODE_BIN" --version))"
 echo "• claude : ${CLAUDE_BIN:-(없음 — Claude 백엔드 사용 불가)}"
 echo "• codex  : ${CODEX_BIN:-(없음 — Codex 백엔드 사용 불가)}"
+for b in "$NODE_BIN" "$CLAUDE_BIN" "$CODEX_BIN"; do
+  case "$b" in
+    *"/.nvm/"*|*"/.asdf/"*|*"/.volta/"*|*"/mise/"*|*"/.fnm/"*|*"/.local/share/fnm/"*)
+      echo "⚠ $b 는 버전 관리자 경로입니다. 그 버전을 지우면 브리지가 멈추니, 버전을 바꾼 뒤에는 이 스크립트를 다시 실행하세요." >&2 ;;
+  esac
+done
 if [[ -z "$CLAUDE_BIN" && -z "$CODEX_BIN" ]]; then
   echo "⚠ claude, codex CLI 를 모두 찾지 못했습니다. 설치 후 이 스크립트를 다시 실행하세요." >&2
 fi
@@ -54,16 +69,22 @@ fi
 mkdir -p "$INSTALL_DIR"
 cp "$REPO_DIR/host/host.js" "$INSTALL_DIR/host.js"
 
-# config.json (JSON-encoded by node so odd characters in paths are safe)
+# config.json (JSON-encoded by node so odd characters in paths are safe). Keys the user added by hand
+# (claudeExtraArgs, codexExtraArgs, s2ApiKey, webDomains, keepApiKeyEnv) are preserved.
 "$NODE_BIN" -e '
+const fs = require("fs");
 const [file, claudePath, codexPath, p] = process.argv.slice(1);
-require("fs").writeFileSync(file, JSON.stringify({
+let prev = {};
+try { prev = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
+fs.writeFileSync(file, JSON.stringify({
+  ...prev,
   claudePath: claudePath || "claude",
   codexPath: codexPath || "codex",
   path: p,
   installedAt: new Date().toISOString(),
-}, null, 2) + "\n");
+}, null, 2) + "\n", { mode: 0o600 });
 ' "$INSTALL_DIR/config.json" "$CLAUDE_BIN" "$CODEX_BIN" "$USER_PATH"
+echo "• PATH   : $(printf '%s' "$USER_PATH" | cut -c1-120)…"
 
 LAUNCHER="$INSTALL_DIR/run-host.sh"
 {
@@ -81,6 +102,8 @@ if [[ "$OS" == "Darwin" ]]; then
     "$BASE/Google/Chrome"
     "$BASE/Google/Chrome Beta"
     "$BASE/Google/Chrome Canary"
+    "$BASE/Google/Chrome Dev"
+    "$BASE/Google/Chrome for Testing"
     "$BASE/Chromium"
     "$BASE/BraveSoftware/Brave-Browser"
     "$BASE/Microsoft Edge"
@@ -92,10 +115,15 @@ else
   BROWSER_DIRS=(
     "$BASE/google-chrome"
     "$BASE/google-chrome-beta"
+    "$BASE/google-chrome-unstable"
     "$BASE/chromium"
     "$BASE/BraveSoftware/Brave-Browser"
     "$BASE/microsoft-edge"
     "$BASE/vivaldi"
+    "$HOME/snap/chromium/common/chromium"
+    "$HOME/.var/app/com.google.Chrome/config/google-chrome"
+    "$HOME/.var/app/org.chromium.Chromium/config/chromium"
+    "$HOME/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser"
   )
 fi
 

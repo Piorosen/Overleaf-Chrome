@@ -8,7 +8,7 @@ if (argv.includes('--version')) {
   console.log('codex-cli 0.0.0-fake');
   process.exit(0);
 }
-if (process.env.FAKE_ARGS_FILE) fs.writeFileSync(process.env.FAKE_ARGS_FILE, JSON.stringify(argv));
+if (process.env.FAKE_ARGS_FILE) fs.writeFileSync(process.env.FAKE_ARGS_FILE, JSON.stringify({ args: argv, cwd: process.cwd() }));
 const out = argv[argv.indexOf('-o') + 1];
 let input = '';
 process.stdin.on('data', (d) => { input += d; });
